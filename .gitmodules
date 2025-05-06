@@ -1,0 +1,9 @@
+[submodule "submodule/PUMA"]
+	path = submodule/PUMA
+	url = https://github.com/rperezdattari/PUMA-Deep-Metric-IL-for-Stable-Motion-Primitives.git
+[submodule "submodule/BCSDM"]
+	path = submodule/BCSDM
+	url = https://github.com/Hajunsu/Contracting_share.git
+[submodule "submodule/CONDOR"]
+	path = submodule/CONDOR
+	url = https://github.com/rperezdattari/Stable-Motion-Primitives-via-Imitation-and-Contrastive-Learning.git
