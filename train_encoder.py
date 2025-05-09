@@ -35,10 +35,10 @@ class TrainParams:
 
     # Training hyperparameters
     batch_size: int = 1
-    epochs: int = 300
-    learning_rate: float = 1e-2
+    epochs: int = 200
+    learning_rate: float = 1e-4
     weight_decay: float = 1e-4
-    triplet_margin: float = 1e-4
+    triplet_margin: float = 1e-3
     device: str = "cpu"
     results_path: str = "results/"
 
@@ -107,6 +107,7 @@ class TripletDemoDataset(Dataset):
 
 def main():
     params = TrainParams()
+    epoch_grads = []
 
     # 1. Preprocess (unchanged)
     data = DataPreprocessor(params=params, verbose=True).run()
@@ -127,6 +128,7 @@ def main():
         max_vel = max_vel,
         order = params.dynamical_system_order
     )
+    
     loader = DataLoader(dataset, batch_size=params.batch_size,
                         shuffle=True, drop_last=True)
 
@@ -143,6 +145,7 @@ def main():
         device=device
     ).to(device)
     goals = torch.from_numpy(goals).float().to(device)
+    print(goals)
     encoder.update_goals_latent_space(goals)
 
     optimizer = torch.optim.AdamW(encoder.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
@@ -150,7 +153,7 @@ def main():
     loss_mse = torch.nn.MSELoss()
     
     scheduler = CosineAnnealingWarmUpRestarts(optimizer,
-    T_0=40, T_mult=2, eta_max=params.learning_rate,T_up=5,gamma=0.4)            
+    T_0=50, T_mult=2, eta_max=params.learning_rate,T_up=10,gamma=0.5)            
 
     # print(prim_ids)
     # print(n_primitives)
@@ -169,7 +172,9 @@ def main():
     print(start_points)
     # 4. Training loop
     for epoch in range(1, params.epochs + 1):
-        total_loss = 0.0        
+        total_loss = 0.0     
+        grad_sum = 0.0
+        grad_count = 0   
         for x_t, x_tp1, prim, traj_idx, t_idx  in loader:
             x_t   = x_t.to(device)
             x_tp1 = x_tp1.to(device)
@@ -187,8 +192,8 @@ def main():
             anchor_vec = encoder.get_goals_latent_space_batch(prim)
             loss_anchor = torch.norm(anchor_vec, p=2, dim=1).pow(2).mean()
             
-            if epoch > 150:
-                loss = loss_trp(anchor_vec, pos, neg) + loss_anchor
+            if epoch > 100:
+                loss = loss_trp(anchor_vec, pos, neg) 
             else:
                 alpha = (t_idx.float()/T).view(-1,1)   # [B,1]
                 lin  = (1-alpha) * line_start + alpha * line_end
@@ -198,20 +203,37 @@ def main():
             
             optimizer.zero_grad()
             loss.backward()
+            for p in encoder.parameters():
+                if p.grad is None:
+                    continue
+                grad_sum += p.grad.abs().mean().item()
+                grad_count += 1
+            
             optimizer.step()
 
             total_loss += loss.item()
             scheduler.step()
-            
+        print(anchor_vec)
         encoder.update_goals_latent_space(goals)
         if epoch == params.epochs:
             print(encoder.get_goals_latent_space_batch(prim))
-                
+        avg_epoch_grad = grad_sum / grad_count if grad_count > 0 else 0.0
+        epoch_grads.append(avg_epoch_grad)
+        print(f"  [Avg grad] {avg_epoch_grad:.6e}")
         print(f"Epoch {epoch}/{params.epochs} — Triplet Loss: {total_loss:.6f}")
 
     # 5. Save
     torch.save(encoder.state_dict(), params.results_path + "encoder_triplet_ver2.pt")
     print("Encoder training complete. Weights saved to", params.results_path + "encoder_triplet_ver2.pt")
-
+    
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.plot(range(1, len(epoch_grads) + 1), epoch_grads, marker='o')
+    plt.xlabel('Epoch')
+    plt.ylabel('Average Gradient Magnitude')
+    plt.title('Epoch-wise Average Gradient Magnitudes')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
 if __name__ == '__main__':
     main()

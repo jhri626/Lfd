@@ -42,7 +42,18 @@ class Encoder(torch.nn.Module):
             torch.nn.LayerNorm(hidden_size),
             torch.nn.GELU(),
         )
-        self.layer3 = torch.nn.Linear(hidden_size, latent_space_dim)
+        self.layer3 = torch.nn.Sequential(
+            torch.nn.Linear(hidden_size, hidden_size),
+            torch.nn.LayerNorm(hidden_size),
+            torch.nn.GELU(),
+        )
+        self.layer4 = torch.nn.Sequential(
+            torch.nn.Linear(hidden_size, hidden_size),
+            torch.nn.LayerNorm(hidden_size),
+            torch.nn.GELU(),
+        )
+        
+        self.layer5 = torch.nn.Linear(hidden_size, latent_space_dim)
 
     def encode_primitives(self, primitive_type: torch.Tensor) -> torch.Tensor:
         """
@@ -68,7 +79,9 @@ class Encoder(torch.nn.Module):
         inp = torch.cat([x, enc], dim=1)
         h = self.layer1(inp)
         h = self.layer2(h)
-        y_t = self.layer3(h)
+        h = self.layer3(h)
+        h = self.layer4(h)
+        y_t = self.layer5(h)
         return y_t
 
     def update_goals_latent_space(self, goals: torch.Tensor):
