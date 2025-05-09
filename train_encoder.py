@@ -1,233 +1,217 @@
-# train_full.py
-
-import os
-import numpy as np
 import torch
-import torch.optim as optim
+import numpy as np
 from torch.utils.data import Dataset, DataLoader
-from types import SimpleNamespace
-import sys
 
+import sys
+import os
 base_dir = os.path.dirname(os.path.abspath(__file__))
 src_path = os.path.join(base_dir, 'submodule', 'CONDOR', 'src')
 sys.path.insert(0, src_path)
 
-# --- 1) Import modules ---
+from dataclasses import dataclass
 from submodule.CONDOR.src.data_preprocessing.data_preprocessor import DataPreprocessor
-from utils.neural_net import Encoder
-from submodule.CONDOR.src.agent.utils.ranking_losses import TripletLoss
-# --- Dataset wrapper with padding handling ---
-class PreprocessedDataset(Dataset):
-    def __init__(self, demos_train, prim_ids):
-        """
-        Custom Dataset for preprocessed trajectories. Handles variable lengths
-        by padding internally but provides access only to valid data pairs.
+from submodule.CONDOR.src.agent.utils.dynamical_system_operations import normalize_state
+from encoder import Encoder
+from sceduler import CosineAnnealingWarmUpRestarts
 
-        demos_train: list of np.ndarray (dim, T_i) or np.ndarray (N, T, D)
-        prim_ids:    list or array of length N
-        """
-        prim_ids = np.array(prim_ids, dtype=np.int64)
+@dataclass
+class TrainParams:
+    # Pipeline params (unchanged)
+    workspace_dimensions: int = 2
+    dynamical_system_order: int = 2
+    dataset_name: str = "LAIR"
+    selected_primitives_ids: str ="0"
+    trajectories_resample_length: int = 100
+    state_increment: float = 0.2
+    workspace_boundaries_type: str = "from data"
+    workspace_boundaries: tuple = ((-1, 1),)*3
+    spline_sample_type: str = "evenly spaced"
+    evaluation_samples_length: int = 10
+    imitation_window_size: int = 2  # need at least 2 for triplet
 
-        # case 1: demos_train is a list of (dim, T_i) arrays (variable lengths)
-        if isinstance(demos_train, list):
-            n = len(demos_train)
-            dims = [traj.shape[0] for traj in demos_train]
-            if len(set(dims)) != 1:
-                raise ValueError(f"All trajectories must have same state-dimension but got {set(dims)}")
-            D = dims[0]
+    # Encoder architecture
+    latent_space_dim: int = 4
+    hidden_size: int = 300
 
-            # --- Start of Changes ---
-            # Store the original length of each trajectory
-            self._original_lengths = [traj.shape[1] for traj in demos_train]
-            # Find the maximum length for padding
-            T_max = max(self._original_lengths)
+    # Training hyperparameters
+    batch_size: int = 1
+    epochs: int = 300
+    learning_rate: float = 1e-2
+    weight_decay: float = 1e-4
+    triplet_margin: float = 1e-4
+    device: str = "cpu"
+    results_path: str = "results/"
 
-            # Create a padded numpy array to store all trajectories (for easy indexing)
-            # Data access will still be limited to original lengths via _valid_indices
-            data = np.zeros((n, T_max, D), dtype=float)
-            for i, traj in enumerate(demos_train):
-                ti = traj.shape[1]
-                # Transpose traj from (D, T_i) to (T_i, D) before placing in data
-                data[i, :ti, :] = traj.T # Copy original data, leave rest as zeros (padding)
-
-            self.trajs = data        # shape (N, T_max, D) - padded array
-            self.T = T_max           # Max (padded) length
-            self.D = D               # State dimension
-            self.N = n               # Number of trajectories
-
-            # Pre-calculate all valid (trajectory_idx, time_step) pairs
-            # A valid pair (x_t, x_{t+1}) exists for t0 from 0 up to original_length - 2
-            self._valid_indices = []
-            for traj_idx in range(self.N):
-                original_length = self._original_lengths[traj_idx]
-                 # Iterate up to original_length - 1 to get pairs (t0, t0+1)
-                 # where t0+1 is the last actual data point index
-                for t0 in range(original_length - 1):
-                     self._valid_indices.append((traj_idx, t0))
-
-            print(f"Created {len(self._valid_indices)} valid (state, next_state) pairs from {self.N} trajectories.")
-
-            # --- End of Changes ---
-
-        # case 2: demos_train is already a 3D np.ndarray (assumed uniform length or already padded externally)
-        # We still generate valid indices based on the assumed length self.T
-        elif isinstance(demos_train, np.ndarray) and demos_train.ndim == 3:
-            self.trajs = demos_train  # assumed shape (N, T, D)
-            self.N, self.T, self.D = demos_train.shape
-
-            # --- Start of Changes: Generate valid indices assuming uniform length ---
-            # Assume all trajectories in the 3D array have the length self.T
-            self._original_lengths = [self.T] * self.N
-            self._valid_indices = []
-            for traj_idx in range(self.N):
-                 original_length = self._original_lengths[traj_idx]
-                 # Iterate up to original_length - 1 to get pairs (t0, t0+1)
-                 # This will cover all steps if original_length == self.T
-                 for t0 in range(original_length - 1):
-                     self._valid_indices.append((traj_idx, t0))
-
-            print(f"Created {len(self._valid_indices)} valid (state, next_state) pairs from {self.N} uniform length trajectories.")
-            # --- End of Changes ---
-
-        else:
-            raise ValueError(
-                "Unsupported demos_train type: "
-                f"{type(demos_train)} with ndim={getattr(demos_train, 'ndim', None)}"
-            )
-
-        self.prim_ids = prim_ids
-        assert self.N == len(self.prim_ids), \
-            f"Number of prim_ids ({len(self.prim_ids)}) must match number of trajectories ({self.N})"
-
-    # --- Start of Changes ---
-    def __len__(self):
-        """
-        Returns the total number of valid (state, next_state) pairs across all trajectories.
-        This is the effective size of the dataset for training.
-        """
-        return len(self._valid_indices)
-    # --- End of Changes ---
-
+class TripletDemoDataset(Dataset):
+    def __init__(self, demos_np, prim_ids_np, min_vel, max_vel, order,delta_t=1.0):
+        # demos_np: (n_traj, n_steps, dim_ws, window)
+        self.demos     = torch.from_numpy(demos_np).float()
+        self.prim_ids  = torch.tensor(prim_ids_np, dtype=torch.long)
+        self.min_vel   = min_vel  # torch.Tensor shape (1, dim_ws)
+        self.max_vel   = max_vel  # torch.Tensor shape (1, dim_ws)
+        self.order     = order    # 1 or 2
+        self.delta_t   = delta_t
+        self.n_traj, self.n_steps, dim_ws, window = self.demos.shape
+        assert window >= order, "window 크기는 시스템 차수 이상이어야 합니다."
 
     def __getitem__(self, idx):
-        """
-        Retrieves a single valid (state, next_state, primitive_id) tuple.
-        The index 'idx' maps to a pre-calculated valid pair index.
-        """
-        # --- Start of Changes ---
-        # Get the actual trajectory index and time step from the pre-calculated valid indices
-        traj_idx, t0 = self._valid_indices[idx]
-        # --- End of Changes ---
+        traj = idx // self.n_steps
+        t    = idx % self.n_steps
 
-        # Retrieve data points from the padded array using the valid indices
-        x_t = self.trajs[traj_idx, t0  ] # shape (D,) - current state
-        x_tp1 = self.trajs[traj_idx, t0+1] # shape (D,) - next state
-        prim = self.prim_ids[traj_idx]   # Primitive ID for this trajectory
+        window = self.demos[traj, t]           # (dim_ws, window)
+        pos    = window[:, 0]                 # 위치 x_t
+        # 만약 2차라면 속도도 추가
+        if self.order == 2:
+            next_pos     = window[:, 1]
+            raw_velocity = (next_pos - pos) / self.delta_t  # Δt=1 로 가정
+            # print(raw_velocity)
+            # normalize to [-1,1]
+            vel_norm = normalize_state(
+                raw_velocity,  # (1, dim_ws, 1)
+                x_min=self.min_vel,                  # (1, dim_ws, 1)
+                x_max=self.max_vel                   # (1, dim_ws, 1)
+            ).squeeze(0)
+            # 상태 벡터: [pos; vel_norm]
+            # print(pos,vel_norm)
+            # print(pos.shape,vel_norm.shape)
+            x_t = torch.cat((pos, vel_norm), dim=0)    # (2*dim_ws,)
+        else:
+            x_t = pos
 
-        return (
-            torch.FloatTensor(x_t),
-            torch.FloatTensor(x_tp1),
-            torch.tensor(prim, dtype=torch.long)
-        )
+        # 긍정/부정 샘플 계산 시에도 동일하게 처리
+        # 예: 다음 스텝을 positive로…
+        pos_window = window[:, 1]
+        if self.order == 2:
+            next_pos2     = window[:, 2]  # x_{t+2}
+            raw_vel2      = (next_pos2 - pos_window) / self.delta_t
+
+            vel_norm2     = normalize_state(
+                raw_vel2,
+                x_min=self.min_vel,
+                x_max=self.max_vel
+            ).squeeze(0)
+            
+            x_tp1 = torch.cat((pos_window, vel_norm2), dim=0)
+        else:
+            x_tp1 = pos_window
+            
+        
+        prim_id = self.prim_ids[traj]
+        t_idx = torch.tensor(t, dtype=torch.long)
+        traj_idx = torch.tensor(traj, dtype=torch.long)
+        # print(traj_idx)
+        return x_t, x_tp1, prim_id, traj_idx, t_idx
+    
+    def __len__(self):
+        return self.n_traj * self.n_steps
 
 def main():
-    # --- 0) Params 설정 (예시) ---
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    params = SimpleNamespace(
-        # DataPreprocessor 용
-        trajectories_resample_length=100,
-        state_increment=0.1,
-        workspace_dimensions=2,
-        dynamical_system_order=2,
-        workspace_boundaries_type='from data',
-        workspace_boundaries=[[0,0],[0,0]],
-        evaluation_samples_length=50,
-        dataset_name='LAIR',
-        selected_primitives_ids='0,1,2,3,4,5,6,7,8,9,10',
-        spline_sample_type='evenly spaced',
-        imitation_window_size=10,
-        verbose=False,
-        # Encoder 학습용
-        batch_size=1,
-        latent_dim=4,
-        neurons_hidden_layers=[128,64],
-        n_primitives=2,
-        multi_motion=False,
-        lr=1e-3,
-        margin=1e-4,
-        epochs=1,
-        output_dir='./checkpoints'
+    params = TrainParams()
+
+    # 1. Preprocess (unchanged)
+    data = DataPreprocessor(params=params, verbose=True).run()
+    demos = data['demonstrations train']             # citeturn4file1
+    prim_ids = data['demonstrations primitive id']   
+    goals = data['goals training']                   # citeturn4file1
+
+    # 2. Dataset & DataLoader
+    device = params.device
+    min_vel = torch.from_numpy(data['vel min train'].reshape(1, -1)).float().to(device)
+    max_vel = torch.from_numpy(data['vel max train'].reshape(1, -1)).float().to(device)
+
+    # 3) Dataset 생성 시 필수 인자 함께 전달
+    dataset = TripletDemoDataset(
+        demos_np = demos,
+        prim_ids_np = prim_ids,
+        min_vel = min_vel,
+        max_vel = max_vel,
+        order = params.dynamical_system_order
     )
+    loader = DataLoader(dataset, batch_size=params.batch_size,
+                        shuffle=True, drop_last=True)
 
-    # --- 1) 데이터 전처리 실행 ---
-    pre = DataPreprocessor(params, verbose=False)
-    out = pre.run()
+    # 3. Model & Optimizer
+    dim_state = params.workspace_dimensions * params.dynamical_system_order
+    n_primitives = len(np.unique(prim_ids))
+    device = params.device
 
-    demos_train = out['demonstrations raw']              # (N, W, D)
-    prim_ids    = out['demonstrations primitive id']       # (N,)
-    print("Number of demonstrations:", len(demos_train))
-    print("Shapes of each demo (dim, length):")
-    for i, traj in enumerate(demos_train):
-        print(f"  demo {i}: {traj.shape}")
-    # 'goals training' 은 normalized goal 들: shape (n_primitives, D)
-    goals = torch.FloatTensor(out['goals']).to(device)
-    print(goals.shape)
-    
-
-    # --- 2) DataLoader 준비 ---
-    dataset = PreprocessedDataset(demos_train, prim_ids)
-    loader  = DataLoader(dataset, batch_size=params.batch_size,
-                         shuffle=False, num_workers=4)
-
-    # --- 3) 모델/손실/옵티마이저 초기화 ---
     encoder = Encoder(
-        dim_state=dataset.D,
-        latent_dim=params.latent_dim,
-        hidden_layers=params.neurons_hidden_layers,
-        n_primitives=params.n_primitives,
-        multi_motion=params.multi_motion
+        dim_state=dim_state,
+        n_primitives=n_primitives,
+        latent_space_dim=params.latent_space_dim,
+        hidden_size=params.hidden_size,
+        device=device
     ).to(device)
+    goals = torch.from_numpy(goals).float().to(device)
+    encoder.update_goals_latent_space(goals)
 
-    triplet_loss = TripletLoss(margin=params.margin, swap=True)
-    optimizer    = optim.Adam(encoder.parameters(), lr=params.lr)
+    optimizer = torch.optim.AdamW(encoder.parameters(), lr=params.learning_rate, weight_decay=params.weight_decay)
+    loss_trp = torch.nn.TripletMarginLoss(margin=params.triplet_margin)
+    loss_mse = torch.nn.MSELoss()
+    
+    scheduler = CosineAnnealingWarmUpRestarts(optimizer,
+    T_0=40, T_mult=2, eta_max=params.learning_rate,T_up=5,gamma=0.4)            
 
-    # --- 4) 학습 루프 ---
+    # print(prim_ids)
+    # print(n_primitives)
+    n_traj    = dataset.n_traj               # 궤적 개수
+    D         = params.latent_space_dim
+    T = params.trajectories_resample_length - 1
+    ε         = 0.01                         # 노이즈 스케일 (조절 가능)
+    device    = params.device
+
+    # (1) 모든 궤적에 대해 동일한 base start (예: 0벡터)
+    base_start = torch.ones(D, device=device)
+
+# (2) 데모별로 살짝씩 다른 start_points 생성
+    start_points = base_start.unsqueeze(0).repeat(n_traj, 1) \
+             + (torch.randn(n_traj, D, device=device) * ε) 
+    print(start_points)
+    # 4. Training loop
     for epoch in range(1, params.epochs + 1):
-        encoder.train()
-        running_loss = 0.0
-
-        for x_t, x_tp1, prim in loader:
+        total_loss = 0.0        
+        for x_t, x_tp1, prim, traj_idx, t_idx  in loader:
             x_t   = x_t.to(device)
             x_tp1 = x_tp1.to(device)
             prim  = prim.to(device)
-            # print("x_t: ", x_t)
-
-            # 4.1) 임베딩
-            emb_t    = encoder(x_t, prim)      # anchor 이전 상태
-            emb_tp1  = encoder(x_tp1, prim)    # anchor 긍정(positive) 상태
-            # goal 이 anchor 역할
-            emb_goal   = torch.zeros(params.latent_dim)
+            t_idx  = t_idx.to(device)
+            traj_idx = traj_idx.to(device)
             
-
-
-            # 4.2) Triplet 손실: (anchor=goal, positive=emb_tp1, negative=emb_t)
-            loss = triplet_loss(emb_goal, emb_tp1, emb_t)
-
-            # 4.3) 역전파 및 갱신
+            # Anchor: goal embedding
+            pos    = encoder(x_tp1, prim)
+            neg    = encoder(x_t, prim)
+            
+            # print(traj_idx)
+            line_end = torch.zeros(params.latent_space_dim)           # 예: 원점
+            line_start = start_points[traj_idx]
+            anchor_vec = encoder.get_goals_latent_space_batch(prim)
+            loss_anchor = torch.norm(anchor_vec, p=2, dim=1).pow(2).mean()
+            
+            if epoch > 150:
+                loss = loss_trp(anchor_vec, pos, neg) + loss_anchor
+            else:
+                alpha = (t_idx.float()/T).view(-1,1)   # [B,1]
+                lin  = (1-alpha) * line_start + alpha * line_end
+                loss_lin = loss_mse(neg, lin)
+                
+                loss = loss_lin + 1e-3 * loss_anchor   # 1e-3은 가중치 예시
+            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            running_loss += loss.item()
+            total_loss += loss.item()
+            scheduler.step()
+            
+        encoder.update_goals_latent_space(goals)
+        if epoch == params.epochs:
+            print(encoder.get_goals_latent_space_batch(prim))
+                
+        print(f"Epoch {epoch}/{params.epochs} — Triplet Loss: {total_loss:.6f}")
 
-        avg_loss = running_loss / len(loader)
-        print(f"[Epoch {epoch:03d}/{params.epochs}] Avg Triplet Loss: {avg_loss:.4f}")
-
-    # --- 5) 모델 저장 ---
-    os.makedirs(params.output_dir, exist_ok=True)
-    ckpt = os.path.join(params.output_dir, 'triplet_encoder.pth')
-    torch.save(encoder.state_dict(), ckpt)
-    print(f"Saved encoder to {ckpt}")
+    # 5. Save
+    torch.save(encoder.state_dict(), params.results_path + "encoder_triplet_ver2.pt")
+    print("Encoder training complete. Weights saved to", params.results_path + "encoder_triplet_ver2.pt")
 
 if __name__ == '__main__':
     main()
