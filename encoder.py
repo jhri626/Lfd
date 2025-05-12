@@ -17,12 +17,14 @@ class Encoder(torch.nn.Module):
         latent_space_dim: int = 64,
         hidden_size: int = 256,
         device: Union[str, torch.device] = "cuda",
+        multi_motion: bool =False,
     ):
         super().__init__()
         self.device = torch.device(device)
         self.dim_state = dim_state
         self.n_primitives = n_primitives
         self.latent_space_dim = latent_space_dim
+        self.multi_motion = multi_motion
 
         # One-hot primitive encodings for multi-motion
         self.register_buffer(
@@ -31,7 +33,10 @@ class Encoder(torch.nn.Module):
         self.register_buffer("goals_latent_space", torch.zeros(n_primitives, latent_space_dim, device=device))
 
         # MLP: [dim_state + n_primitives] → hidden → hidden → latent
-        input_dim = dim_state + n_primitives
+        if self.multi_motion == True:
+            input_dim = dim_state + n_primitives
+        else:
+            input_dim = dim_state
         self.layer1 = torch.nn.Sequential(
             torch.nn.Linear(input_dim, hidden_size),
             torch.nn.LayerNorm(hidden_size),
@@ -42,16 +47,16 @@ class Encoder(torch.nn.Module):
             torch.nn.LayerNorm(hidden_size),
             torch.nn.GELU(),
         )
-        self.layer3 = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, hidden_size),
-            torch.nn.LayerNorm(hidden_size),
-            torch.nn.GELU(),
-        )
-        self.layer4 = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, hidden_size),
-            torch.nn.LayerNorm(hidden_size),
-            torch.nn.GELU(),
-        )
+        # self.layer3 = torch.nn.Sequential(
+        #     torch.nn.Linear(hidden_size, hidden_size),
+        #     torch.nn.LayerNorm(hidden_size),
+        #     torch.nn.GELU(),
+        # )
+        # self.layer4 = torch.nn.Sequential(
+        #     torch.nn.Linear(hidden_size, hidden_size),
+        #     torch.nn.LayerNorm(hidden_size),
+        #     torch.nn.GELU(),
+        # )
         
         self.layer5 = torch.nn.Linear(hidden_size, latent_space_dim)
 
@@ -75,12 +80,15 @@ class Encoder(torch.nn.Module):
         Forward pass: concatenate state + primitive one-hot, apply MLP.
         """
         x = x_t.to(self.device)
-        enc = self.encode_primitives(primitive_type)
-        inp = torch.cat([x, enc], dim=1)
+        if self.multi_motion == True:
+            enc = self.encode_primitives(primitive_type)
+            inp = torch.cat([x, enc], dim=1)
+        else:
+            inp = x
         h = self.layer1(inp)
         h = self.layer2(h)
-        h = self.layer3(h)
-        h = self.layer4(h)
+        # h = self.layer3(h)
+        # h = self.layer4(h)
         y_t = self.layer5(h)
         return y_t
 

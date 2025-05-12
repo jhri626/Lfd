@@ -21,7 +21,7 @@ class TrainParams:
     dynamical_system_order: int = 2
     dataset_name: str = "LAIR"
     selected_primitives_ids: str ="0"
-    trajectories_resample_length: int = 100
+    trajectories_resample_length: int = 2000
     state_increment: float = 0.2
     workspace_boundaries_type: str = "from data"
     workspace_boundaries: tuple = ((-1, 1),)*3
@@ -35,10 +35,10 @@ class TrainParams:
 
     # Training hyperparameters
     batch_size: int = 1
-    epochs: int = 200
+    epochs: int = 1000
     learning_rate: float = 1e-4
     weight_decay: float = 1e-4
-    triplet_margin: float = 1e-3
+    triplet_margin: float = 1e-4
     device: str = "cpu"
     results_path: str = "results/"
 
@@ -142,7 +142,8 @@ def main():
         n_primitives=n_primitives,
         latent_space_dim=params.latent_space_dim,
         hidden_size=params.hidden_size,
-        device=device
+        device=device,
+        multi_motion = False
     ).to(device)
     goals = torch.from_numpy(goals).float().to(device)
     print(goals)
@@ -192,7 +193,7 @@ def main():
             anchor_vec = encoder.get_goals_latent_space_batch(prim)
             loss_anchor = torch.norm(anchor_vec, p=2, dim=1).pow(2).mean()
             
-            if epoch > 100:
+            if epoch > 0:
                 loss = loss_trp(anchor_vec, pos, neg) 
             else:
                 alpha = (t_idx.float()/T).view(-1,1)   # [B,1]
@@ -213,7 +214,7 @@ def main():
 
             total_loss += loss.item()
             scheduler.step()
-        print(anchor_vec)
+        # print(anchor_vec)
         encoder.update_goals_latent_space(goals)
         if epoch == params.epochs:
             print(encoder.get_goals_latent_space_batch(prim))
