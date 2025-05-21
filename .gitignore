@@ -3,3 +3,5 @@ dataset/
 embedding/
 results/
 _pycache_/
+data.ipynb
+dummy.ipynb

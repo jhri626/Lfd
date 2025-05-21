@@ -182,7 +182,7 @@ def main():
     n_traj    = dataset.n_traj               # 궤적 개수
     D         = params.latent_space_dim
     T = params.trajectories_resample_length - 1
-    ε         = 0.1                         # 노이즈 스케일 (조절 가능)
+    e         = 0.1                         # 노이즈 스케일 (조절 가능)
     device    = params.device
 
     # (1) 모든 궤적에 대해 동일한 base start (예: 0벡터)
@@ -190,7 +190,7 @@ def main():
 
 # (2) 데모별로 살짝씩 다른 start_points 생성
     start_points = base_start.unsqueeze(0).repeat(n_traj, 1) \
-             + (torch.randn(n_traj, D, device=device) * ε) 
+             + (torch.randn(n_traj, D, device=device) * e) 
     print(start_points)
     # 4. Training loop
     for epoch in range(1, params.epochs + 1):

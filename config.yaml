@@ -1,0 +1,51 @@
+# 모션 프리미티브 모델 설정 파일
+
+# 데이터 파이프라인 설정
+data:
+  dataset_name: "LAIR"  # 데이터셋 이름: "LAIR", "LASA" 등
+  selected_primitives_ids: "0"  # 사용할 프리미티브 ID (쉼표로 구분)
+  workspace_dimensions: 2  # 작업 공간 차원
+  dynamical_system_order: 2  # 동역학계 차수 (1 또는 2)
+  trajectories_resample_length: 2000  # 궤적 리샘플링 길이
+  state_increment: 0.2  # 상태 증분
+  workspace_boundaries_type: "from data"  # 작업 공간 경계 유형
+  spline_sample_type: "evenly spaced"  # 스플라인 샘플링 유형
+  evaluation_samples_length: 10  # 평가 샘플 길이
+  imitation_window_size: 2  # 모방 윈도우 크기
+  use_cached_data: true  # 캐시된 데이터 사용 여부
+  data_dir: "results/data"  # 데이터 저장 디렉토리
+  batch_size: 128  # 배치 크기
+  shuffle: true  # 셔플 여부
+  num_workers: 4  # 데이터 로더 워커 수
+  pin_memory: true  # 메모리 고정 여부
+
+# 모델 구조 설정
+model:
+  latent_dim: 4  # 잠재 공간 차원
+  multi_motion: false  # 다중 동작 지원 여부
+  encoder_hidden_sizes: [300, 300]  # 인코더 은닉층 크기
+  decoder_hidden_sizes: [300, 300]  # 디코더 은닉층 크기
+
+
+# 학습 설정
+training:
+  epochs: 200  # 기본 학습 에포크 수 (모든 모델에 적용)
+  epochs_autoencoder: 200  # 오토인코더 학습 에포크 수
+  log_interval: 10  # 로깅 간격
+  learning_rates:
+    encoder: 1.0e-3  # 인코더 학습률
+    decoder: 1.0e-3  # 디코더 학습률
+  weight_decay: 1.0e-5  # 가중치 감쇠
+
+# 파일 경로 설정
+paths:
+  save_dir: "results/model"  # 모델 저장 디렉토리
+  # encoder_path: null  # 사전 학습된 인코더 체크포인트 경로 (null 또는 경로)
+  encoder_path: "results/ver8/encoder_triplet_ver8.pt"  # 대체 경로 예시
+
+# 시각화 설정
+visualization:
+  enable: true  # 궤적 시각화 여부
+  steps: 100  # 궤적 생성 스텝 수
+  n_samples_per_primitive: 3  # 프리미티브당 샘플 수
+  max_samples: 6  # 최대 샘플 수
