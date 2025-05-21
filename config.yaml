@@ -1,51 +1,51 @@
-# ¸ğ¼Ç ÇÁ¸®¹ÌÆ¼ºê ¸ğµ¨ ¼³Á¤ ÆÄÀÏ
+# ëª¨ì…˜ í”„ë¦¬ë¯¸í‹°ë¸Œ ëª¨ë¸ ì„¤ì • íŒŒì¼
 
-# µ¥ÀÌÅÍ ÆÄÀÌÇÁ¶óÀÎ ¼³Á¤
+# ë°ì´í„° íŒŒì´í”„ë¼ì¸ ì„¤ì •
 data:
-  dataset_name: "LAIR"  # µ¥ÀÌÅÍ¼Â ÀÌ¸§: "LAIR", "LASA" µî
-  selected_primitives_ids: "0"  # »ç¿ëÇÒ ÇÁ¸®¹ÌÆ¼ºê ID (½°Ç¥·Î ±¸ºĞ)
-  workspace_dimensions: 2  # ÀÛ¾÷ °ø°£ Â÷¿ø
-  dynamical_system_order: 2  # µ¿¿ªÇĞ°è Â÷¼ö (1 ¶Ç´Â 2)
-  trajectories_resample_length: 2000  # ±ËÀû ¸®»ùÇÃ¸µ ±æÀÌ
-  state_increment: 0.2  # »óÅÂ ÁõºĞ
-  workspace_boundaries_type: "from data"  # ÀÛ¾÷ °ø°£ °æ°è À¯Çü
-  spline_sample_type: "evenly spaced"  # ½ºÇÃ¶óÀÎ »ùÇÃ¸µ À¯Çü
-  evaluation_samples_length: 10  # Æò°¡ »ùÇÃ ±æÀÌ
-  imitation_window_size: 2  # ¸ğ¹æ À©µµ¿ì Å©±â
-  use_cached_data: true  # Ä³½ÃµÈ µ¥ÀÌÅÍ »ç¿ë ¿©ºÎ
-  data_dir: "results/data"  # µ¥ÀÌÅÍ ÀúÀå µğ·ºÅä¸®
-  batch_size: 128  # ¹èÄ¡ Å©±â
-  shuffle: true  # ¼ÅÇÃ ¿©ºÎ
-  num_workers: 4  # µ¥ÀÌÅÍ ·Î´õ ¿öÄ¿ ¼ö
-  pin_memory: true  # ¸Ş¸ğ¸® °íÁ¤ ¿©ºÎ
+  dataset_name: "LAIR"  # ë°ì´í„°ì…‹ ì´ë¦„: "LAIR", "LASA" ë“±
+  selected_primitives_ids: "0"  # ì‚¬ìš©í•  í”„ë¦¬ë¯¸í‹°ë¸Œ ID (ì‰¼í‘œë¡œ êµ¬ë¶„)
+  workspace_dimensions: 2  # ì‘ì—… ê³µê°„ ì°¨ì›
+  dynamical_system_order: 2  # ë™ì—­í•™ê³„ ì°¨ìˆ˜ (1 ë˜ëŠ” 2)
+  trajectories_resample_length: 2000  # ê¶¤ì  ë¦¬ìƒ˜í”Œë§ ê¸¸ì´
+  state_increment: 0.2  # ìƒíƒœ ì¦ë¶„
+  workspace_boundaries_type: "from data"  # ì‘ì—… ê³µê°„ ê²½ê³„ ìœ í˜•
+  spline_sample_type: "evenly spaced"  # ìŠ¤í”Œë¼ì¸ ìƒ˜í”Œë§ ìœ í˜•
+  evaluation_samples_length: 10  # í‰ê°€ ìƒ˜í”Œ ê¸¸ì´
+  imitation_window_size: 2  # ëª¨ë°© ìœˆë„ìš° í¬ê¸°
+  use_cached_data: true  # ìºì‹œëœ ë°ì´í„° ì‚¬ìš© ì—¬ë¶€
+  data_dir: "results/data"  # ë°ì´í„° ì €ì¥ ë””ë ‰í† ë¦¬
+  batch_size: 128  # ë°°ì¹˜ í¬ê¸°
+  shuffle: true  # ì…”í”Œ ì—¬ë¶€
+  num_workers: 4  # ë°ì´í„° ë¡œë” ì›Œì»¤ ìˆ˜
+  pin_memory: true  # ë©”ëª¨ë¦¬ ê³ ì • ì—¬ë¶€
 
-# ¸ğµ¨ ±¸Á¶ ¼³Á¤
+# ëª¨ë¸ êµ¬ì¡° ì„¤ì •
 model:
-  latent_dim: 4  # ÀáÀç °ø°£ Â÷¿ø
-  multi_motion: false  # ´ÙÁß µ¿ÀÛ Áö¿ø ¿©ºÎ
-  encoder_hidden_sizes: [300, 300]  # ÀÎÄÚ´õ Àº´ĞÃş Å©±â
-  decoder_hidden_sizes: [300, 300]  # µğÄÚ´õ Àº´ĞÃş Å©±â
+  latent_dim: 4  # ì ì¬ ê³µê°„ ì°¨ì›
+  multi_motion: false  # ë‹¤ì¤‘ ë™ì‘ ì§€ì› ì—¬ë¶€
+  encoder_hidden_sizes: [300, 300]  # ì¸ì½”ë” ì€ë‹‰ì¸µ í¬ê¸°
+  decoder_hidden_sizes: [300, 300]  # ë””ì½”ë” ì€ë‹‰ì¸µ í¬ê¸°
 
 
-# ÇĞ½À ¼³Á¤
+# í•™ìŠµ ì„¤ì •
 training:
-  epochs: 200  # ±âº» ÇĞ½À ¿¡Æ÷Å© ¼ö (¸ğµç ¸ğµ¨¿¡ Àû¿ë)
-  epochs_autoencoder: 200  # ¿ÀÅäÀÎÄÚ´õ ÇĞ½À ¿¡Æ÷Å© ¼ö
-  log_interval: 10  # ·Î±ë °£°İ
+  epochs: 200  # ê¸°ë³¸ í•™ìŠµ ì—í¬í¬ ìˆ˜ (ëª¨ë“  ëª¨ë¸ì— ì ìš©)
+  epochs_autoencoder: 200  # ì˜¤í† ì¸ì½”ë” í•™ìŠµ ì—í¬í¬ ìˆ˜
+  log_interval: 10  # ë¡œê¹… ê°„ê²©
   learning_rates:
-    encoder: 1.0e-3  # ÀÎÄÚ´õ ÇĞ½À·ü
-    decoder: 1.0e-3  # µğÄÚ´õ ÇĞ½À·ü
-  weight_decay: 1.0e-5  # °¡ÁßÄ¡ °¨¼è
+    encoder: 1.0e-3  # ì¸ì½”ë” í•™ìŠµë¥ 
+    decoder: 1.0e-3  # ë””ì½”ë” í•™ìŠµë¥ 
+  weight_decay: 1.0e-5  # ê°€ì¤‘ì¹˜ ê°ì‡ 
 
-# ÆÄÀÏ °æ·Î ¼³Á¤
+# íŒŒì¼ ê²½ë¡œ ì„¤ì •
 paths:
-  save_dir: "results/model"  # ¸ğµ¨ ÀúÀå µğ·ºÅä¸®
-  # encoder_path: null  # »çÀü ÇĞ½ÀµÈ ÀÎÄÚ´õ Ã¼Å©Æ÷ÀÎÆ® °æ·Î (null ¶Ç´Â °æ·Î)
-  encoder_path: "results/ver8/encoder_triplet_ver8.pt"  # ´ëÃ¼ °æ·Î ¿¹½Ã
+  save_dir: "results/model"  # ëª¨ë¸ ì €ì¥ ë””ë ‰í† ë¦¬
+  # encoder_path: null  # ì‚¬ì „ í•™ìŠµëœ ì¸ì½”ë” ì²´í¬í¬ì¸íŠ¸ ê²½ë¡œ (null ë˜ëŠ” ê²½ë¡œ)
+  encoder_path: "results/ver8/encoder_triplet_ver8.pt"  # ëŒ€ì²´ ê²½ë¡œ ì˜ˆì‹œ
 
-# ½Ã°¢È­ ¼³Á¤
+# ì‹œê°í™” ì„¤ì •
 visualization:
-  enable: true  # ±ËÀû ½Ã°¢È­ ¿©ºÎ
-  steps: 100  # ±ËÀû »ı¼º ½ºÅÜ ¼ö
-  n_samples_per_primitive: 3  # ÇÁ¸®¹ÌÆ¼ºê´ç »ùÇÃ ¼ö
-  max_samples: 6  # ÃÖ´ë »ùÇÃ ¼ö
+  enable: true  # ê¶¤ì  ì‹œê°í™” ì—¬ë¶€
+  steps: 100  # ê¶¤ì  ìƒì„± ìŠ¤í… ìˆ˜
+  n_samples_per_primitive: 3  # í”„ë¦¬ë¯¸í‹°ë¸Œë‹¹ ìƒ˜í”Œ ìˆ˜
+  max_samples: 6  # ìµœëŒ€ ìƒ˜í”Œ ìˆ˜
