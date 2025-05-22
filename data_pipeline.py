@@ -62,13 +62,14 @@ class TrajectoryDataset(Dataset):
     def __init__(
         self, 
         demos_np: np.ndarray, 
-        prim_ids_np: np.ndarray, 
-        min_vel: torch.Tensor, 
-        max_vel: torch.Tensor, 
+        prim_ids_np: np.ndarray,
+        vel_min_np: np.ndarray, 
+        vel_max_np: np.ndarray, 
         order: int,
-        min_acc: Optional[torch.Tensor] = None,
-        max_acc: Optional[torch.Tensor] = None,
-        delta_t: float = 1.0
+        acc_min_np: Optional[np.ndarray] = None,
+        acc_max_np: Optional[np.ndarray] = None,
+        delta_t: float = 1.0,
+        use_per_traj_normalization: bool = True
     ):
         """
         데이터셋 초기화
@@ -76,37 +77,52 @@ class TrajectoryDataset(Dataset):
         Args:
             demos_np: (n_traj, n_steps, dim_ws, window) 데모 궤적
             prim_ids_np: (n_traj,) 프리미티브 ID
-            min_vel: (1, dim_ws) 최소 속도
-            max_vel: (1, dim_ws) 최대 속도
+            vel_min_np: 최소 속도 (use_per_traj_normalization=True이면 (n_traj, dim_ws) 아니면 (1, dim_ws))
+            vel_max_np: 최대 속도 (use_per_traj_normalization=True이면 (n_traj, dim_ws) 아니면 (1, dim_ws))
             order: 동역학계 차수
-            min_acc: (1, dim_ws) 최소 가속도 (2차 시스템)
-            max_acc: (1, dim_ws) 최대 가속도 (2차 시스템)
+            acc_min_np: 최소 가속도 (use_per_traj_normalization=True이면 (n_traj, dim_ws) 아니면 (1, dim_ws)) (2차 시스템용)
+            acc_max_np: 최대 가속도 (use_per_traj_normalization=True이면 (n_traj, dim_ws) 아니면 (1, dim_ws)) (2차 시스템용)
             delta_t: 시간 간격
+            use_per_traj_normalization: 궤적별 정규화 사용 여부
         """
         # 토치 텐서 변환
-        self.demos = torch.from_numpy(demos_np).float()
-        self.prim_ids = torch.tensor(prim_ids_np, dtype=torch.long)
-        self.min_vel = min_vel
-        self.max_vel = max_vel
-        self.min_acc = min_acc
-        self.max_acc = max_acc
+        self.demos     = torch.tensor(demos_np).float()       # (n_traj, n_steps, dim_ws, window)
+        self.prim_ids  = torch.tensor(prim_ids_np).long()
+        self.min_vel = vel_min_np.float()
+        self.max_vel = vel_max_np.float()
+        
+        if acc_min_np is not None and acc_max_np is not None:
+            self.min_acc = acc_min_np.float()
+            self.max_acc = acc_max_np.float()
+        else:
+            self.min_acc = None
+            self.max_acc = None
+            
         self.order = order
         self.delta_t = delta_t
+        self.use_per_traj_normalization = use_per_traj_normalization
         
         # 데이터 크기 정보
         self.n_traj, self.n_steps, self.dim_ws, window = self.demos.shape
         assert window > order, "윈도우 크기는 시스템 차수보다 커야 합니다."
         
-        print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")    
+        # 정규화 파라미터 형태 확인 및 수정
+        if use_per_traj_normalization:
+            assert self.min_vel.shape[0] == self.n_traj, "궤적별 정규화를 위해선 min_vel의 첫 차원이 궤적 수와 일치해야 합니다."
+            assert self.max_vel.shape[0] == self.n_traj, "궤적별 정규화를 위해선 max_vel의 첫 차원이 궤적 수와 일치해야 합니다."
+            if self.min_acc is not None and self.max_acc is not None:
+                assert self.min_acc.shape[0] == self.n_traj, "궤적별 정규화를 위해선 min_acc의 첫 차원이 궤적 수와 일치해야 합니다."
+                assert self.max_acc.shape[0] == self.n_traj, "궤적별 정규화를 위해선 max_acc의 첫 차원이 궤적 수와 일치해야 합니다."
+        
+        print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")
+        print(f"궤적별 정규화 사용: {use_per_traj_normalization}")
     def __getitem__(self, idx):
         # 인덱스에서 궤적 및 시간 스텝 추출
         traj = idx // (self.n_steps - 1)  # 마지막 스텝은 다음 상태가 없으므로 제외
         t = idx % (self.n_steps - 1)
 
         # 전체 윈도우 데이터 추출 (현재 상태용)
-        window_current = self.demos[traj, t]  # (dim_ws, window)
-
-        # 시스템 차수가 2차인 경우 속도 계산 및 추가
+        window_current = self.demos[traj, t]  # (dim_ws, window)        # 시스템 차수가 2차인 경우 속도 계산 및 추가
         if self.order == 2:
             if t < self.n_steps - 2:  # 다음 스텝이 존재하는 경우
                 next_state = self.demos[traj, t + 1]
@@ -114,9 +130,20 @@ class TrajectoryDataset(Dataset):
             else:  # 마지막 스텝의 경우 속도를 0으로 설정
                 velocity = torch.zeros_like(window_current)
 
-            # 속도 데이터를 정규화
-            min_vel_expanded = self.min_vel.view(-1, 1).expand(-1, velocity.size(1))  # (2, 1) → (2, window)
-            max_vel_expanded = self.max_vel.view(-1, 1).expand(-1, velocity.size(1))  # (2, 1) → (2, window)
+            # 속도 데이터를 정규화 (traj별 정규화 지원)
+            if self.use_per_traj_normalization:
+                # traj별 정규화 파라미터 사용
+                traj_min_vel = self.min_vel[traj]  # (dim_ws,)
+                traj_max_vel = self.max_vel[traj]  # (dim_ws,)
+                
+                # 윈도우 차원으로 확장
+                min_vel_expanded = traj_min_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
+                max_vel_expanded = traj_max_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
+            else:
+                # 전체 데이터셋 정규화 파라미터 사용
+                min_vel_expanded = self.min_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
+                max_vel_expanded = self.max_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
+
             velocity = normalize_velocity(velocity, min_vel_expanded, max_vel_expanded)
             # 속도 데이터를 window_current에 추가
             window_current = torch.cat((window_current, velocity), dim=0)
@@ -188,49 +215,113 @@ class DataPipeline:
             print(f"프리미티브 수: {n_prims}")
             
         return data
-    
-    def create_dataset(self, data: Dict[str, Any], delta_t: float = 1.0):
+    def create_dataset(self, data: Dict[str, Any], delta_t: float = 1.0, use_per_traj_normalization: bool = True):
         """
         데이터셋 생성
         
         Args:
             data: 전처리된 데이터 딕셔너리
             delta_t: 시간 간격
+            use_per_traj_normalization: 궤적별 정규화 사용 여부
             
         Returns:
             데이터셋 객체
         """
         demos = data['demonstrations train']
         prim_ids = data['demonstrations primitive id']
+        n_traj = demos.shape[0]
+        dim_ws = demos.shape[2]
         
         # 속도/가속도 정규화 파라미터
-        min_vel = torch.from_numpy(data['vel min train'].reshape(1, -1)).float()
-        max_vel = torch.from_numpy(data['vel max train'].reshape(1, -1)).float()
+        if use_per_traj_normalization:
+            # 궤적별 정규화를 위한 준비
+            # 데이터에서 각 궤적별 최소/최대 속도 계산 또는 로드
+            try:
+                # 각 궤적별 min/max 속도 계산
+                vel_min_per_traj = np.zeros((n_traj, dim_ws))
+                vel_max_per_traj = np.zeros((n_traj, dim_ws))
+                
+                if self.verbose:
+                    print("각 궤적별 정규화 파라미터 계산 중...")
+                
+                # 각 궤적에 대해 정규화 파라미터 계산
+                for i in range(n_traj):
+                    traj_data = demos[i]  # (n_steps, dim_ws, window)
+                    for j in range(dim_ws):
+                        # 각 차원별 최소/최대 속도 추출
+                        vel_min_per_traj[i, j] = np.min(data['vel min train'][j])
+                        vel_max_per_traj[i, j] = np.max(data['vel max train'][j])
+                
+                min_vel = torch.from_numpy(vel_min_per_traj).float()  # (n_traj, dim_ws)
+                max_vel = torch.from_numpy(vel_max_per_traj).float()  # (n_traj, dim_ws)
+                
+                # 가속도 정규화 파라미터 (2차 시스템용)
+                if self.params.dynamical_system_order == 2 and 'acc min train' in data and 'acc max train' in data:
+                    acc_min_per_traj = np.zeros((n_traj, dim_ws))
+                    acc_max_per_traj = np.zeros((n_traj, dim_ws))
+                    
+                    for i in range(n_traj):
+                        for j in range(dim_ws):
+                            # 각 차원별 최소/최대 가속도 추출
+                            acc_min_per_traj[i, j] = np.min(data['acc min train'][j])
+                            acc_max_per_traj[i, j] = np.max(data['acc max train'][j])
+                    
+                    min_acc = torch.from_numpy(acc_min_per_traj).float()  # (n_traj, dim_ws)
+                    max_acc = torch.from_numpy(acc_max_per_traj).float()  # (n_traj, dim_ws)
+                else:
+                    min_acc = None
+                    max_acc = None
+                    
+                if self.verbose:
+                    print(f"궤적별 정규화 파라미터 계산 완료: {n_traj}개 궤적")
+            except Exception as e:
+                print(f"궤적별 정규화 파라미터 계산 중 오류 발생: {e}")
+                print("전체 데이터셋 정규화로 대체합니다.")
+                use_per_traj_normalization = False
         
-        if self.params.dynamical_system_order == 2:
-            # 2차 시스템인 경우 가속도 정규화 파라미터
-            min_acc = torch.from_numpy(data['acc min train'].reshape(1, -1)).float() if 'acc min train' in data else None
-            max_acc = torch.from_numpy(data['acc max train'].reshape(1, -1)).float() if 'acc max train' in data else None
+        # 궤적별 정규화를 사용하지 않거나 오류 발생 시 전체 데이터셋 정규화
+        if not use_per_traj_normalization:
+            min_vel_global = torch.from_numpy(data['vel min train'].reshape(1, -1)).float()  # (1, dim_ws)
+            max_vel_global = torch.from_numpy(data['vel max train'].reshape(1, -1)).float()  # (1, dim_ws)
             
+            # 모든 궤적에 동일한 정규화 파라미터 적용
+            min_vel = min_vel_global.repeat(n_traj, 1)  # (n_traj, dim_ws)
+            max_vel = max_vel_global.repeat(n_traj, 1)  # (n_traj, dim_ws)
+            
+            # 가속도 정규화 파라미터 (2차 시스템용)
+            if self.params.dynamical_system_order == 2 and 'acc min train' in data and 'acc max train' in data:
+                min_acc_global = torch.from_numpy(data['acc min train'].reshape(1, -1)).float()  # (1, dim_ws)
+                max_acc_global = torch.from_numpy(data['acc max train'].reshape(1, -1)).float()  # (1, dim_ws)
+                
+                min_acc = min_acc_global.repeat(n_traj, 1)  # (n_traj, dim_ws)
+                max_acc = max_acc_global.repeat(n_traj, 1)  # (n_traj, dim_ws)
+            else:
+                min_acc = None
+                max_acc = None
+        
+        # 데이터셋 생성
+        if self.params.dynamical_system_order == 2:
             dataset = TrajectoryDataset(
                 demos_np=demos,
                 prim_ids_np=prim_ids,
-                min_vel=min_vel,
-                max_vel=max_vel,
-                min_acc=min_acc,
-                max_acc=max_acc,
+                vel_min_np=min_vel,
+                vel_max_np=max_vel,
+                acc_min_np=min_acc,
+                acc_max_np=max_acc,
                 order=self.params.dynamical_system_order,
-                delta_t=delta_t
+                delta_t=delta_t,
+                use_per_traj_normalization=use_per_traj_normalization
             )
         else:
             # 1차 시스템
             dataset = TrajectoryDataset(
                 demos_np=demos,
                 prim_ids_np=prim_ids,
-                min_vel=min_vel,
-                max_vel=max_vel,
+                vel_min_np=min_vel,
+                vel_max_np=max_vel,
                 order=self.params.dynamical_system_order,
-                delta_t=delta_t
+                delta_t=delta_t,
+                use_per_traj_normalization=use_per_traj_normalization
             )
             
         return dataset
@@ -262,11 +353,13 @@ class DataPipeline:
             print(f"데이터 로더 생성: 배치 크기 {batch_size}, 배치 수 {len(loader)}")
             
         return loader
-    
-    def run(self):
+    def run(self, use_per_traj_normalization: bool = True):
         """
         전체 파이프라인 실행
         
+        Args:
+            use_per_traj_normalization: 궤적별 정규화 사용 여부
+            
         Returns:
             data: 전처리된 데이터 딕셔너리
             dataset: 데이터셋 객체
@@ -276,7 +369,7 @@ class DataPipeline:
         data = self.load_and_preprocess()
         
         # 데이터셋 생성
-        dataset = self.create_dataset(data)
+        dataset = self.create_dataset(data, use_per_traj_normalization=use_per_traj_normalization)
         
         # 데이터 로더 생성
         loader = self.create_data_loader(dataset)
@@ -297,6 +390,23 @@ def normalize_velocity(velocity, min_vel, max_vel):
         정규화된 속도
     """
     return normalize_state(velocity, x_min=min_vel, x_max=max_vel)
+
+
+def denormalize_velocity(velocity_norm, min_vel, max_vel):
+    """
+    정규화된 속도를 원래 스케일로 복원하는 함수
+    
+    Args:
+        velocity_norm: 정규화된 속도 
+        min_vel: 최소 속도
+        max_vel: 최대 속도
+        
+    Returns:
+        원래 스케일의 속도
+    """
+    # normalize_state는 (x - x_min)/(x_max - x_min)을 2배 하고 -1 연산
+    # 역연산: (velocity_norm + 1) / 2 * (max_vel - min_vel) + min_vel
+    return (velocity_norm + 1.0) * 0.5 * (max_vel - min_vel) + min_vel
 
 
 def normalize_acceleration(acceleration, min_acc, max_acc):

@@ -42,9 +42,9 @@ def main():
     parser.add_argument('--multi', action='store_true', help='다중 동작 지원')
     parser.add_argument('--save_dir', type=str, default='results/model', help='저장 디렉토리')
     parser.add_argument('--data_dir', type=str, default='results/data', help='데이터 저장 디렉토리')
-    parser.add_argument('--encoder_path', type=str, default=None, help='인코더 체크포인트 경로')
+    parser.add_argument('--encoder_path', type=str, default=None, help='인코더 체크포인트 경로')    
     parser.add_argument('--epochs', type=int, default=100, help='학습 에포크')
-    parser.add_argument('--batch_size', type=int, default=128, help='배치 크기')
+    parser.add_argument('--batch_size', type=int, default=128, help='배치 크기')    
     parser.add_argument('--use_cached_data', action='store_true', help='캐시된 데이터 사용')
     parser.add_argument('--dataset', type=str, default='LAIR', help='데이터셋 이름')
     parser.add_argument('--primitives', type=str, default='0', help='사용할 프리미티브 ID')
@@ -126,11 +126,13 @@ def main():
             for field_name in [f for f in dir(DataPipelineParams) if not f.startswith('_')]:
                 if field_name in data_config:
                     setattr(data_params, field_name, data_config[field_name])
-    
-    # 데이터 캐시 경로
+      # 데이터 캐시 경로
     data_cache_path = os.path.join(args.data_dir, f"{args.dataset}_{args.primitives}_order{args.order}.npz")
     os.makedirs(args.data_dir, exist_ok=True)
-    
+      # 데이터 로딩 및 전처리
+    # 궤적별 정규화 기본값 설정
+    use_traj_norm = True
+
     # 데이터 로딩 및 전처리
     if args.use_cached_data and os.path.exists(data_cache_path):
         print(f"캐시된 데이터를 로드합니다: {data_cache_path}")
@@ -139,12 +141,14 @@ def main():
         
         # 데이터셋 및 로더 생성
         pipeline = DataPipeline(data_params)
-        dataset = pipeline.create_dataset(preprocessed_data)
+        print(f"궤적별 정규화 사용: {use_traj_norm}")
+        dataset = pipeline.create_dataset(preprocessed_data, use_per_traj_normalization=use_traj_norm)
         loader = pipeline.create_data_loader(dataset)
     else:
         print("데이터 파이프라인 실행 중...")
         pipeline = DataPipeline(data_params)
-        preprocessed_data, dataset, loader = pipeline.run()
+        print(f"궤적별 정규화 사용: {use_traj_norm}")
+        preprocessed_data, dataset, loader = pipeline.run(use_per_traj_normalization=use_traj_norm)
         
         # 데이터 캐싱
         from data_pipeline import save_preprocessed_data
