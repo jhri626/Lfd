@@ -202,7 +202,7 @@ class MotionPrimitiveModel:
             acc_min: 최소 가속도 (2차 시스템용)
             acc_max: 최대 가속도 (2차 시스템용)
         """
-        self.state_dynamics.set_normalization_params(vel_min, vel_max, acc_min, acc_max)      
+        self.state_dynamics.set_normalization_params(vel_min, vel_max, acc_min, acc_max)        
     def train_autoencoder(
         self,     
         epochs: int = 100,
@@ -213,12 +213,15 @@ class MotionPrimitiveModel:
         오토인코더(인코더+디코더) 학습 - 윈도우 기반 학습 지원 및 배치 처리 최적화
 
         Args:
-            windows: (N, dim_ws, window) 윈도우 상태 데이터
-            primitive_types: (N,) 프리미티브 인덱스
             epochs: 학습 에포크 수
-            batch_size: 배치 크기
             log_interval: 로깅 간격
             dataloader: 외부에서 제공된 데이터로더 (있는 경우 사용)
+                        데이터로더는 (windows, prim_ids, [full_trajectory, traj_idx, t_idx]) 형태를 반환해야 함
+                        - windows: (B, dim_ws, window) 윈도우 상태 데이터
+                        - prim_ids: (B,) 프리미티브 인덱스
+                        - full_trajectory: (B, n_steps, dim_ws, window) 전체 궤적 데이터 (선택 사항)
+                        - traj_idx: (B,) 궤적 인덱스 (선택 사항)
+                        - t_idx: (B,) 시간 인덱스 (선택 사항)
         """
         if self.encoder_optimizer is None or self.decoder_optimizer is None:
             self.configure_optimizers()
@@ -231,19 +234,28 @@ class MotionPrimitiveModel:
         for epoch in range(epochs):
             epoch_loss = 0.0
             batches = 0
-            
             for batch_data in dataloader:
                 # 데이터 로더의 반환값 형태에 따라 처리
-                if len(batch_data) == 2:  # (windows, prim_ids) 형태
+                if len(batch_data) == 2:  # (windows, prim_ids) 형태 - 이전 형식 호환성
                     batch_windows, batch_prims = batch_data
-                elif len(batch_data) == 4:  # (windows, prim_ids, traj_idx, t_idx) 형태
+                    has_trajectory = False
+                elif len(batch_data) == 4:  # (windows, prim_ids, traj_idx, t_idx) 형태 - 이전 형식 호환성
                     batch_windows, batch_prims, _, _ = batch_data
+                    has_trajectory = False
+                elif len(batch_data) == 5:  # (windows, prim_ids, full_trajectory, traj_idx, t_idx) 형태 - 새로운 형식
+                    batch_windows, batch_prims, batch_full_trajectories, batch_traj_idx, batch_t_idx = batch_data
+                    has_trajectory = True
                 else:
                     raise ValueError(f"지원되지 않는 데이터 형식: {len(batch_data)} 항목")
                 
                 # 배치 데이터를 디바이스로 이동
                 batch_windows = batch_windows.to(self.device)  # (B, dim_ws, window)
                 batch_prims = batch_prims.to(self.device)      # (B,)
+                
+                if has_trajectory:
+                    batch_full_trajectories = batch_full_trajectories.to(self.device)  # (B, n_steps, dim_ws)
+                    batch_traj_idx = batch_traj_idx.to(self.device)  # (B,)
+                    batch_t_idx = batch_t_idx.to(self.device)  # (B,)
                 
                 # 윈도우 크기 확인
                 window_size = batch_windows.shape[2]
@@ -253,22 +265,39 @@ class MotionPrimitiveModel:
                 
                 # 순차 처리 대신 배치로 처리 (PyTorch 효율적 처리)
                 # 시작 위치는 항상 윈도우의 첫 번째 위치
-                positions = batch_windows[:, :, 0]  # (B, dim_ws)
                 
-                # 모든 시간 스텝에 대해 손실 계산
+                # First step
+                
+                # encoder 
+                states = batch_windows[:, :, 0]  # (B, dim_ws)
                 for t in range(window_size - 1):
-                    # 배치 처리: 인코딩 -> 디코딩 -> 다이나믹스
-                    latent = self.encoder(positions, batch_prims)  # (B, latent_dim)
-                    decoder_out = self.decoder(latent, batch_prims)  # (B, dim_state)
-                    next_positions = self.state_dynamics(positions, decoder_out, batch_prims)  # (B, dim_ws)
+                    # 인코딩
+                    latent_state = self.encoder(states, batch_prims)  # (B, latent_dim)
+                    latent_in_latent = latent_state
                     
-                    # 다음 실제 위치와 비교
+                    # latent dynamics 손실 (첫 번째 스텝 제외)
+                    if t > 0:
+                        latent_in_latent = self.latent_dynamics(latent_in_latent, batch_prims)
+                        latent_loss = nn.functional.mse_loss(latent_state, latent_in_latent)
+                        total_loss += latent_loss
+                        
+                        triplet_loss = nn.functional.triplet_margin_loss(
+                            self.latent_dynamics.goals_latent[batch_prims.long()], latent_state, prev_latent_state, margin=1e-4) # TODO goal update logic
+                        
+                        total_loss += triplet_loss
+                    
+                    # 디코딩 및 상태 동역학
+                    decoder_out = self.decoder(latent_state, batch_prims)  # (B, dim_state)
+                    next_states = self.state_dynamics(states, decoder_out, batch_prims)  # (B, dim_ws)
+                    
+                    # 상태 예측 손실
                     target_positions = batch_windows[:, :, t+1]  # (B, dim_ws)
-                    step_loss = nn.functional.mse_loss(next_positions, target_positions)
-                    total_loss += step_loss
+                    state_loss = nn.functional.mse_loss(next_states, target_positions)
+                    total_loss += state_loss
                     
-                    # 다음 예측된 위치로 업데이트 (롤아웃 방식)
-                    positions = next_positions
+                    # 다음 스텝을 위한 업데이트
+                    prev_latent_state = latent_state
+                    states = next_states
                 
                 # 모든 시간 스텝에 대한 평균 손실
                 batch_loss = total_loss / (window_size - 1)

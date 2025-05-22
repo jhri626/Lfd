@@ -115,14 +115,19 @@ class TrajectoryDataset(Dataset):
                 assert self.max_acc.shape[0] == self.n_traj, "궤적별 정규화를 위해선 max_acc의 첫 차원이 궤적 수와 일치해야 합니다."
         
         print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")
-        print(f"궤적별 정규화 사용: {use_per_traj_normalization}")
+        print(f"궤적별 정규화 사용: {use_per_traj_normalization}")    
     def __getitem__(self, idx):
         # 인덱스에서 궤적 및 시간 스텝 추출
         traj = idx // (self.n_steps - 1)  # 마지막 스텝은 다음 상태가 없으므로 제외
         t = idx % (self.n_steps - 1)
 
         # 전체 윈도우 데이터 추출 (현재 상태용)
-        window_current = self.demos[traj, t]  # (dim_ws, window)        # 시스템 차수가 2차인 경우 속도 계산 및 추가
+        window_current = self.demos[traj, t]  # (dim_ws, window)        
+        
+        # 전체 궤적 데이터 추출 - 이 궤적에 해당하는 모든 윈도우
+        full_trajectory = self.demos[traj,:,:,0]  # (n_steps, dim_ws)
+        
+        # 시스템 차수가 2차인 경우 속도 계산 및 추가
         if self.order == 2:
             if t < self.n_steps - 2:  # 다음 스텝이 존재하는 경우
                 next_state = self.demos[traj, t + 1]
@@ -155,7 +160,8 @@ class TrajectoryDataset(Dataset):
         traj_idx = torch.tensor(traj, dtype=torch.long)
         t_idx = torch.tensor(t, dtype=torch.long)
         
-        return window_current, prim_id, traj_idx, t_idx
+        # 현재 윈도우, 프리미티브 ID, 전체 궤적, 궤적 인덱스, 시간 인덱스 반환
+        return window_current, prim_id, full_trajectory, traj_idx, t_idx
     
     def __len__(self):
         # 마지막 스텝을 제외한 유효한 인덱스만 반환
