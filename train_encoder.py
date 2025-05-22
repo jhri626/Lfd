@@ -45,8 +45,8 @@ class TrainParams:
     cold_start : int = 5000
     triplet_margin: float = 1e-4
     linear_mapping_param : float = 0.05
-    device: str = "cuda"  # or dynamically set to torch.device(...)
-    results_path: str = "results/ver8"
+    device: str = "cpu"  # or dynamically set to torch.device(...)
+    results_path: str = "results/ver9"
 
 class TripletDemoDataset(Dataset):
     def __init__(self, demos_np, prim_ids_np, min_vel, max_vel, order,delta_t=1.0):
@@ -204,6 +204,8 @@ def main():
             traj_idx= traj_idx.to(device, non_blocking=True)
             t_idx   = t_idx.to(device, non_blocking=True)
             
+            print(x_t[0])
+            print(x_tp1[0])
             # Anchor: goal embedding
             pos    = encoder(x_tp1, prim)
             neg    = encoder(x_t, prim)

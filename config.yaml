@@ -9,12 +9,12 @@ data:
   trajectories_resample_length: 2000  # 궤적 리샘플링 길이
   state_increment: 0.2  # 상태 증분
   workspace_boundaries_type: "from data"  # 작업 공간 경계 유형
-  spline_sample_type: "evenly spaced"  # 스플라인 샘플링 유형
+  spline_sample_type: "from data"  # 스플라인 샘플링 유형
   evaluation_samples_length: 10  # 평가 샘플 길이
   imitation_window_size: 2  # 모방 윈도우 크기
   use_cached_data: true  # 캐시된 데이터 사용 여부
   data_dir: "results/data"  # 데이터 저장 디렉토리
-  batch_size: 128  # 배치 크기
+  batch_size: 250  # 배치 크기
   shuffle: true  # 셔플 여부
   num_workers: 4  # 데이터 로더 워커 수
   pin_memory: true  # 메모리 고정 여부

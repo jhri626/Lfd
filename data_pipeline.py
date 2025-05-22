@@ -49,6 +49,8 @@ class DataPipelineParams:
     shuffle: bool = True                             # 셔플 여부
     num_workers: int = 4                             # 데이터 로더 워커 수
     pin_memory: bool = True                          # 메모리 고정 여부
+    
+    verbose: bool = True                           # 상세 출력 여부
 
 
 class TrajectoryDataset(Dataset):
@@ -102,9 +104,16 @@ class TrajectoryDataset(Dataset):
         traj = idx // self.n_steps
         t = idx % self.n_steps
         
+        
         # 윈도우 추출
+        
         window = self.demos[traj, t]  # (dim_ws, window)
         pos = window[:, 0]  # 현재 위치
+        if traj==0 and t==5:
+            print(f"window {window[:5]}, 시간 {t}")
+            print(self.demos.shape)
+        if traj==0 and t==4:
+            print(f"window {window[:5]}, 시간 {t}")
         
         # 상태 벡터 구성 (차수에 따라)
         if self.order == 2:
@@ -142,6 +151,10 @@ class TrajectoryDataset(Dataset):
         prim_id = self.prim_ids[traj]
         t_idx = torch.tensor(t, dtype=torch.long)
         traj_idx = torch.tensor(traj, dtype=torch.long)
+        if traj==0 and t==5:
+            print(f"궤적 {traj}, 시간 {t}: {x_t}, {x_tp1}")
+        if traj==0 and t==4:
+            print(f"궤적 {traj}, 시간 {t}: {x_t}, {x_tp1}")
         
         return x_t, x_tp1, prim_id, traj_idx, t_idx
     
@@ -165,6 +178,7 @@ class DataPipeline:
         """
         self.params = params
         self.verbose = verbose
+        
         
         if verbose:
             print("데이터 파이프라인 초기화:")
@@ -213,7 +227,6 @@ class DataPipeline:
         Returns:
             데이터셋 객체
         """
-        print(data)
         demos = data['demonstrations train']
         prim_ids = data['demonstrations primitive id']
         
@@ -338,16 +351,39 @@ def save_preprocessed_data(data: Dict[str, Any], save_path: str):
     """
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     
-    # 넘파이 배열 저장
-    np.savez_compressed(
-        save_path,
-        **{k: v for k, v in data.items() if isinstance(v, np.ndarray)}
-    )
+    # 데이터를 타입별로 분류
+    np_arrays = {}
+    other_data = {}
     
+    for k, v in data.items():
+        if isinstance(v, np.ndarray):
+            np_arrays[k] = v
+        else:
+            # numpy가 아닌 데이터는 pickle로 직렬화
+            other_data[k] = v
+    
+    # 메타데이터 생성
+    metadata = {
+        'keys': list(data.keys()),
+        'shapes': {k: v.shape if isinstance(v, np.ndarray) else None for k, v in data.items()},
+        'dtypes': {k: str(v.dtype) if isinstance(v, np.ndarray) else str(type(v)) for k, v in data.items()},
+        'other_data': other_data  # numpy가 아닌 데이터를 메타데이터에 포함
+    }
+    
+    # 데이터 저장
+    save_dict = {
+        'metadata': metadata,
+        **np_arrays  # numpy 배열
+    }
+    
+    np.savez_compressed(save_path, **save_dict)
     print(f"전처리된 데이터가 {save_path}에 저장됨")
+    print(f"저장된 numpy 배열 키: {list(np_arrays.keys())}")
+    if other_data:
+        print(f"메타데이터에 저장된 기타 데이터 키: {list(other_data.keys())}")
 
 
-def load_preprocessed_data(load_path: str):
+def load_preprocessed_data(load_path: str) -> Dict[str, np.ndarray]:
     """
     전처리된 데이터 로드
     
@@ -357,11 +393,49 @@ def load_preprocessed_data(load_path: str):
     Returns:
         로드된 데이터 딕셔너리
     """
-    loaded = np.load(load_path, allow_pickle=True)
-    data = {k: loaded[k] for k in loaded.files}
-    
-    print(f"전처리된 데이터를 {load_path}에서 로드함")
-    return data
+    try:
+        loaded = np.load(load_path, allow_pickle=True)
+        
+        if 'metadata' not in loaded:
+            print("Warning: 이전 형식의 캐시 파일입니다.")
+            return {k: loaded[k] for k in loaded.files}
+            
+        # 메타데이터 추출
+        metadata = loaded['metadata'].item()
+        
+        # numpy 배열 추출
+        data = {k: loaded[k] for k in loaded.files if k != 'metadata'}
+        
+        # 기타 데이터 복원 (있는 경우)
+        if 'other_data' in metadata:
+            data.update(metadata['other_data'])
+        
+        # 데이터 검증
+        loaded_keys = set(data.keys())
+        expected_keys = set(metadata['keys'])
+        
+        if loaded_keys != expected_keys:
+            missing = expected_keys - loaded_keys
+            extra = loaded_keys - expected_keys
+            if missing:
+                print(f"Warning: 누락된 키: {missing}")
+            if extra:
+                print(f"Warning: 추가된 키: {extra}")
+                
+        # numpy 배열 형상 검증
+        for k, v in data.items():
+            if isinstance(v, np.ndarray) and k in metadata['shapes']:
+                expected_shape = metadata['shapes'][k]
+                if v.shape != expected_shape:
+                    print(f"Warning: '{k}'의 형상이 다릅니다. 예상: {expected_shape}, 실제: {v.shape}")
+        
+        print(f"데이터를 {load_path}에서 로드함")
+        print(f"로드된 키: {list(data.keys())}")
+        return data
+        
+    except Exception as e:
+        print(f"데이터 로드 중 오류 발생: {str(e)}")
+        raise
 
 
 # 예시 코드
@@ -372,7 +446,8 @@ if __name__ == "__main__":
         dynamical_system_order=2,
         dataset_name="LAIR",
         selected_primitives_ids="0",
-        batch_size=128
+        batch_size=128,
+        verbose=True
     )
     
     # 파이프라인 실행

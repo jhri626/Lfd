@@ -211,8 +211,8 @@ class StateDynamics(nn.Module):
         else:
             # 2차 시스템: 위치와 속도로 구성된 상태 벡터
             # 현재 위치와 속도 분리
-            pos_t = x[:, :self.workspace_dim]
-            vel_t = x[:, self.workspace_dim:]
+            vel_t = x[:, :self.workspace_dim]
+            acc_t = x[:, self.workspace_dim:]
             
             # 목표 위치 얻기
             if primitive_type.ndim == 2:
@@ -221,10 +221,6 @@ class StateDynamics(nn.Module):
                 idx = primitive_type
                 
             goal_pos = self.goals[idx.long()]
-            
-            # 현재 위치와 목표 위치 간의 차이에 비례하는 가속도 계산
-            # 간단한 스프링 모델처럼 동작
-            acc_t = (goal_pos - pos_t) - 0.1 * vel_t  # 속도 감쇠항 추가
             
             # 오일러 적분 - 속도 업데이트
             vel_tp1 = vel_t + acc_t * self.delta_t

@@ -8,6 +8,15 @@ from models.encoder import Encoder
 from models.decoder import Decoder
 from models.latent_dynamics import LatentDynamics
 from models.state_dynamics import StateDynamics
+from models.motion_primitive_model import MotionPrimitiveModel
+
+__all__ = [
+    'Encoder',
+    'Decoder',
+    'LatentDynamics',
+    'StateDynamics',
+    'MotionPrimitiveModel'
+]
 
 __all__ = [
     'Encoder',
