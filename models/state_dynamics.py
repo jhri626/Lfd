@@ -164,7 +164,7 @@ class StateDynamics(nn.Module):
         # 원래 차원으로 되돌리기
         return acceleration.squeeze(-1)
         
-    def forward(self, x: torch.Tensor, primitive_type: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, dx: torch.Tensor, primitive_type: torch.Tensor) -> torch.Tensor:
         """
         순전파: 현재 상태로부터 다음 상태 예측
         
@@ -189,50 +189,42 @@ class StateDynamics(nn.Module):
             # 1차 시스템: 단순 오일러 적분
             # 현재 위치에서 목표 위치로의 방향만 사용
             
-            # 목표 위치 얻기
-            if primitive_type.ndim == 2:
-                idx = torch.argmax(primitive_type, dim=1)
-            else:
-                idx = primitive_type
-                
-            goal_pos = self.goals[idx.long()]
-            
             # 현재 위치
             pos_t = x
             
             # 목표 방향으로의 벡터
-            delta_pos = goal_pos - pos_t
+            vel_t = self.denormalize_velocity(dx)
             
             # 오일러 적분
-            pos_tp1 = pos_t + delta_pos * self.delta_t
-            
+            pos_tp1 = pos_t + vel_t * self.delta_t
             return pos_tp1
+        elif self.dynamical_system_order == 2:
+            pos_t = x[:, :self.workspace_dim]
+            vel_t = x[:, self.workspace_dim:]
+            acc_t= dx[:, self.workspace_dim:]
+            
+            # 정규화된 속도와 가속도를 실제 물리량으로 변환 (필요한 경우)
+            vel_t_denorm = self.denormalize_velocity(vel_t)
+            acc_t_denorm = self.denormalize_acceleration(acc_t)
+            
+            # 오일러 적분
+            vel_tp1_denorm = vel_t_denorm + acc_t_denorm * self.delta_t
+            pos_tp1 = pos_t + vel_t_denorm * self.delta_t
+            
+            # 속도 다시 정규화 (상태 벡터에 저장하기 위해)
+            
+            vel_tp1_norm = self.normalize_velocity(vel_tp1_denorm)
+            vel_tp1_norm = vel_tp1_norm.squeeze(-1)
+            
+            
+            # 다음 상태 벡터 구성
+            next_state = torch.cat([pos_tp1, vel_tp1_norm], dim=1)
+            
+            return next_state
             
         else:
-            # 2차 시스템: 위치와 속도로 구성된 상태 벡터
-            # 현재 위치와 속도 분리
-            vel_t = x[:, :self.workspace_dim]
-            acc_t = x[:, self.workspace_dim:]
+            raise ValueError("dynamical_system_order는 1 또는 2여야 합니다.")
             
-            # 목표 위치 얻기
-            if primitive_type.ndim == 2:
-                idx = torch.argmax(primitive_type, dim=1)
-            else:
-                idx = primitive_type
-                
-            goal_pos = self.goals[idx.long()]
-            
-            # 오일러 적분 - 속도 업데이트
-            vel_tp1 = vel_t + acc_t * self.delta_t
-            
-            # 오일러 적분 - 위치 업데이트
-            pos_tp1 = pos_t + vel_t * self.delta_t + 0.5 * acc_t * self.delta_t ** 2
-            
-            # 상태 벡터 만들기
-            x_tp1 = torch.cat([pos_tp1, vel_tp1], dim=1)
-            
-            return x_tp1
-    
     def multi_step_prediction(
         self, 
         x_init: torch.Tensor, 
@@ -256,10 +248,41 @@ class StateDynamics(nn.Module):
         # 초기 상태
         x_t = x_init
         
+        # 타깃 프리미티브의 목표 가져오기
+        if primitive_type.ndim == 2:
+            idx = torch.argmax(primitive_type, dim=1)
+        else:
+            idx = primitive_type.long()
+        
+        target_goals = self.goals[idx]
+        
         # 순차적 예측
         for t in range(steps):
             trajectories[:, t] = x_t
-            x_t = self.forward(x_t, primitive_type)
+            
+            # 상태에 따라 델타(dx) 생성
+            if self.dynamical_system_order == 1:
+                # 1차 시스템: 목표를 향한 방향
+                dx = target_goals - x_t
+                dx_normalized = self.normalize_velocity(dx)
+            else:
+                # 2차 시스템: 목표로 향하는 가속도 계산
+                pos = x_t[:, :self.workspace_dim]
+                vel = x_t[:, self.workspace_dim:]
+                
+                pos_goals = target_goals
+                dir_to_goal = pos_goals - pos
+                # 감쇠 효과 (종말 속도 0으로 수렴하도록)
+                damping = 0.1
+                acc = dir_to_goal - damping * self.denormalize_velocity(vel)
+                
+                # 가속도 정규화
+                acc_normalized = self.normalize_acceleration(acc)
+                # 정규화된 속도와 가속도를 연결
+                dx_normalized = torch.cat([vel, acc_normalized], dim=1)
+            
+            # 다음 상태 계산
+            x_t = self.forward(x_t, dx_normalized, primitive_type)
             
         return trajectories
     
@@ -297,7 +320,6 @@ class StateDynamics(nn.Module):
         assert goals.shape == self.goals.shape, \
             f"Expected shape {self.goals.shape}, got {goals.shape}"
         self.goals.copy_(goals)
-    
     def compute_loss(self, x_t: torch.Tensor, x_tp1: torch.Tensor, 
                     primitive_type: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
@@ -311,8 +333,37 @@ class StateDynamics(nn.Module):
         Returns:
             손실 딕셔너리
         """
+        # 타깃 프리미티브의 목표 가져오기
+        if primitive_type.ndim == 2:
+            idx = torch.argmax(primitive_type, dim=1)
+        else:
+            idx = primitive_type.long()
+        
+        target_goals = self.goals[idx]
+        
+        # 상태에 따라 델타(dx) 생성
+        if self.dynamical_system_order == 1:
+            # 1차 시스템: 목표를 향한 방향
+            dx = target_goals - x_t
+            dx_normalized = self.normalize_velocity(dx)
+        else:
+            # 2차 시스템: 목표로 향하는 가속도 계산
+            pos = x_t[:, :self.workspace_dim]
+            vel = x_t[:, self.workspace_dim:]
+            
+            pos_goals = target_goals
+            dir_to_goal = pos_goals - pos
+            # 감쇠 효과 (종말 속도 0으로 수렴하도록)
+            damping = 0.1
+            acc = dir_to_goal - damping * self.denormalize_velocity(vel)
+            
+            # 가속도 정규화
+            acc_normalized = self.normalize_acceleration(acc)
+            # 정규화된 속도와 가속도를 연결
+            dx_normalized = torch.cat([vel, acc_normalized], dim=1)
+        
         # 예측 다음 상태
-        x_tp1_pred = self.forward(x_t, primitive_type)
+        x_tp1_pred = self.forward(x_t, dx_normalized, primitive_type)
         
         # MSE 손실
         mse_loss = nn.functional.mse_loss(x_tp1_pred, x_tp1)

@@ -42,7 +42,7 @@ class DataPipelineParams:
     workspace_boundaries: Tuple = ((-1, 1),) * 3     # 작업 공간 경계
     spline_sample_type: str = "evenly spaced"        # 스플라인 샘플링 유형
     evaluation_samples_length: int = 10              # 평가 샘플 길이
-    imitation_window_size: int = 2                   # 모방 윈도우 크기
+    imitation_window_size: int = 5                   # 모방 윈도우 크기 (시간적 문맥을 위한 윈도우 크기)
     
     # 학습 파라미터
     batch_size: int = 128                            # 배치 크기
@@ -97,69 +97,42 @@ class TrajectoryDataset(Dataset):
         self.n_traj, self.n_steps, self.dim_ws, window = self.demos.shape
         assert window > order, "윈도우 크기는 시스템 차수보다 커야 합니다."
         
-        print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")
-
+        print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")    
     def __getitem__(self, idx):
         # 인덱스에서 궤적 및 시간 스텝 추출
-        traj = idx // self.n_steps
-        t = idx % self.n_steps
-        
-        
-        # 윈도우 추출
-        
-        window = self.demos[traj, t]  # (dim_ws, window)
-        pos = window[:, 0]  # 현재 위치
-        if traj==0 and t==5:
-            print(f"window {window[:5]}, 시간 {t}")
-            print(self.demos.shape)
-        if traj==0 and t==4:
-            print(f"window {window[:5]}, 시간 {t}")
-        
-        # 상태 벡터 구성 (차수에 따라)
+        traj = idx // (self.n_steps - 1)  # 마지막 스텝은 다음 상태가 없으므로 제외
+        t = idx % (self.n_steps - 1)
+
+        # 전체 윈도우 데이터 추출 (현재 상태용)
+        window_current = self.demos[traj, t]  # (dim_ws, window)
+
+        # 시스템 차수가 2차인 경우 속도 계산 및 추가
         if self.order == 2:
-            # 2차 시스템: 위치 + 속도
-            next_pos = window[:, 1]
-            raw_velocity = (next_pos - pos) / self.delta_t
-            
-            # 속도 정규화
-            vel_norm = normalize_state(
-                raw_velocity,
-                x_min=self.min_vel,
-                x_max=self.max_vel
-            ).squeeze(0)
-            
-            x_t = torch.cat((pos, vel_norm), dim=0)  # (2*dim_ws,)
-            
-            # 다음 상태 계산 (t+1 시점)
-            pos_tp1 = window[:, 1]  # t+1 위치
-            next_pos2 = window[:, 2]  # t+2 위치
-            raw_vel2 = (next_pos2 - pos_tp1) / self.delta_t
-            
-            vel_norm2 = normalize_state(
-                raw_vel2,
-                x_min=self.min_vel,
-                x_max=self.max_vel
-            ).squeeze(0)
-            
-            x_tp1 = torch.cat((pos_tp1, vel_norm2), dim=0)  # (2*dim_ws,)
-        else:
-            # 1차 시스템: 위치만
-            x_t = pos
-            x_tp1 = window[:, 1]  # t+1 위치
-        
-        # 프리미티브 ID 및 인덱스
+            if t < self.n_steps - 2:  # 다음 스텝이 존재하는 경우
+                next_state = self.demos[traj, t + 1]
+                velocity = (next_state - window_current) / self.delta_t
+            else:  # 마지막 스텝의 경우 속도를 0으로 설정
+                velocity = torch.zeros_like(window_current)
+
+            # 속도 데이터를 정규화
+            min_vel_expanded = self.min_vel.view(-1, 1).expand(-1, velocity.size(1))  # (2, 1) → (2, window)
+            max_vel_expanded = self.max_vel.view(-1, 1).expand(-1, velocity.size(1))  # (2, 1) → (2, window)
+            velocity = normalize_velocity(velocity, min_vel_expanded, max_vel_expanded)
+            # 속도 데이터를 window_current에 추가
+            window_current = torch.cat((window_current, velocity), dim=0)
+
+        # 프리미티브 ID
         prim_id = self.prim_ids[traj]
-        t_idx = torch.tensor(t, dtype=torch.long)
-        traj_idx = torch.tensor(traj, dtype=torch.long)
-        if traj==0 and t==5:
-            print(f"궤적 {traj}, 시간 {t}: {x_t}, {x_tp1}")
-        if traj==0 and t==4:
-            print(f"궤적 {traj}, 시간 {t}: {x_t}, {x_tp1}")
         
-        return x_t, x_tp1, prim_id, traj_idx, t_idx
+        # 궤적 및 시간 인덱스
+        traj_idx = torch.tensor(traj, dtype=torch.long)
+        t_idx = torch.tensor(t, dtype=torch.long)
+        
+        return window_current, prim_id, traj_idx, t_idx
     
     def __len__(self):
-        return self.n_traj * self.n_steps
+        # 마지막 스텝을 제외한 유효한 인덱스만 반환
+        return self.n_traj * (self.n_steps - 1)
 
 
 class DataPipeline:

@@ -202,31 +202,26 @@ class MotionPrimitiveModel:
             acc_min: 최소 가속도 (2차 시스템용)
             acc_max: 최대 가속도 (2차 시스템용)
         """
-        self.state_dynamics.set_normalization_params(vel_min, vel_max, acc_min, acc_max)
-
+        self.state_dynamics.set_normalization_params(vel_min, vel_max, acc_min, acc_max)      
     def train_autoencoder(
-        self, 
-        states: torch.Tensor, 
-        primitive_types: torch.Tensor, 
+        self,     
         epochs: int = 100,
-        batch_size: int = 128,
-        log_interval: int = 10
+        log_interval: int = 10,
+        dataloader: Optional[torch.utils.data.DataLoader] = None
     ):
         """
-        오토인코더(인코더+디코더) 학습
+        오토인코더(인코더+디코더) 학습 - 윈도우 기반 학습 지원 및 배치 처리 최적화
 
         Args:
-            states: (N, dim_state) 상태 데이터
+            windows: (N, dim_ws, window) 윈도우 상태 데이터
             primitive_types: (N,) 프리미티브 인덱스
             epochs: 학습 에포크 수
             batch_size: 배치 크기
             log_interval: 로깅 간격
+            dataloader: 외부에서 제공된 데이터로더 (있는 경우 사용)
         """
         if self.encoder_optimizer is None or self.decoder_optimizer is None:
             self.configure_optimizers()
-
-        dataset_size = states.shape[0]
-        indices = torch.randperm(dataset_size)
         
         self.encoder.train()
         self.decoder.train()
@@ -234,39 +229,61 @@ class MotionPrimitiveModel:
         losses = []
         
         for epoch in range(epochs):
-            total_loss = 0.0
+            epoch_loss = 0.0
             batches = 0
             
-            for start_idx in range(0, dataset_size, batch_size):
-                end_idx = min(start_idx + batch_size, dataset_size)
-                batch_indices = indices[start_idx:end_idx]
+            for batch_data in dataloader:
+                # 데이터 로더의 반환값 형태에 따라 처리
+                if len(batch_data) == 2:  # (windows, prim_ids) 형태
+                    batch_windows, batch_prims = batch_data
+                elif len(batch_data) == 4:  # (windows, prim_ids, traj_idx, t_idx) 형태
+                    batch_windows, batch_prims, _, _ = batch_data
+                else:
+                    raise ValueError(f"지원되지 않는 데이터 형식: {len(batch_data)} 항목")
                 
-                # 배치 데이터
-                state_batch = states[batch_indices].to(self.device)
-                prim_batch = primitive_types[batch_indices].to(self.device)
+                # 배치 데이터를 디바이스로 이동
+                batch_windows = batch_windows.to(self.device)  # (B, dim_ws, window)
+                batch_prims = batch_prims.to(self.device)      # (B,)
                 
-                # 오토인코더 순전파
-                latent = self.encoder(state_batch, prim_batch)
-                recon_state = self.decoder(latent, prim_batch)
-                next_state = self.state_dynamics(recon_state, prim_batch)
-                if epoch == 2 and start_idx == 0:
-                    print(f"Recon: {recon_state[0]}")
-                    print(f"Next state shape: {next_state[0]}")
+                # 윈도우 크기 확인
+                window_size = batch_windows.shape[2]
                 
-                # 손실 계산
-                loss = nn.functional.mse_loss(next_state, state_batch)
+                # 초기화 
+                total_loss = 0.0
+                
+                # 순차 처리 대신 배치로 처리 (PyTorch 효율적 처리)
+                # 시작 위치는 항상 윈도우의 첫 번째 위치
+                positions = batch_windows[:, :, 0]  # (B, dim_ws)
+                
+                # 모든 시간 스텝에 대해 손실 계산
+                for t in range(window_size - 1):
+                    # 배치 처리: 인코딩 -> 디코딩 -> 다이나믹스
+                    latent = self.encoder(positions, batch_prims)  # (B, latent_dim)
+                    decoder_out = self.decoder(latent, batch_prims)  # (B, dim_state)
+                    next_positions = self.state_dynamics(positions, decoder_out, batch_prims)  # (B, dim_ws)
+                    
+                    # 다음 실제 위치와 비교
+                    target_positions = batch_windows[:, :, t+1]  # (B, dim_ws)
+                    step_loss = nn.functional.mse_loss(next_positions, target_positions)
+                    total_loss += step_loss
+                    
+                    # 다음 예측된 위치로 업데이트 (롤아웃 방식)
+                    positions = next_positions
+                
+                # 모든 시간 스텝에 대한 평균 손실
+                batch_loss = total_loss / (window_size - 1)
                 
                 # 최적화
                 self.encoder_optimizer.zero_grad()
                 self.decoder_optimizer.zero_grad()
-                loss.backward()
+                batch_loss.backward()
                 self.encoder_optimizer.step()
                 self.decoder_optimizer.step()
                 
-                total_loss += loss.item()
+                epoch_loss += batch_loss.item()
                 batches += 1
             
-            avg_loss = total_loss / batches
+            avg_loss = epoch_loss / batches
             losses.append(avg_loss)
             
             if (epoch + 1) % log_interval == 0 or epoch == 0:
@@ -274,7 +291,7 @@ class MotionPrimitiveModel:
         
         self.encoder.eval()
         self.decoder.eval()
-        return losses    
+        return losses
     
     def generate_trajectory_latent(
         self, 
