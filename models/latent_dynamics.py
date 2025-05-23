@@ -131,9 +131,6 @@ class LatentDynamics(nn.Module):
         
         zdot_traj = latent_traj[:,1:]-latent_traj[:,:-1]
         zdot_traj = torch.cat([zdot_traj, zdot_traj.new_zeros(zdot_traj.size(0), 1, zdot_traj.size(2))], dim=1)
-        print(z.shape)
-        print(latent_traj.shape)
-        print(zdot_traj.shape)
         
         zdot = R2.gvf_R2(z, self.scale_factor, latent_traj, zdot_traj)
         

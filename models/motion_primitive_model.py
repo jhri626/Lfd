@@ -269,7 +269,9 @@ class MotionPrimitiveModel:
                 # First step
                 
                 # encoder 
-                states = batch_windows[:, :, 0]  # (B, dim_ws)
+                states = batch_windows[:, :, 0] + 0.1 * torch.randn_like(batch_windows[:, :, 0])# (B, dim_ws)
+                batch_latent_trajectories = torch.cat([self.encoder(batch_full_trajectories[:, i, :]).unsqueeze(1) for i in range(batch_full_trajectories.size(1))], dim=1)
+                
                 for t in range(window_size - 1):
                     # 인코딩
                     latent_state = self.encoder(states, batch_prims)  # (B, latent_dim)
@@ -277,12 +279,12 @@ class MotionPrimitiveModel:
                     
                     # latent dynamics 손실 (첫 번째 스텝 제외)
                     if t > 0:
-                        latent_in_latent = self.latent_dynamics(latent_in_latent,batch_full_trajectories ,batch_prims)
+                        latent_in_latent = self.latent_dynamics(latent_in_latent, batch_latent_trajectories ,batch_prims)
                         latent_loss = nn.functional.mse_loss(latent_state, latent_in_latent)
                         total_loss += latent_loss
                         
                         triplet_loss = nn.functional.triplet_margin_loss(
-                            self.latent_dynamics.goals_latent[batch_prims.long()], latent_state, prev_latent_state, margin=1e-4) # TODO goal update logic
+                            self.latent_dynamics.goals_latent[batch_prims.long()], latent_state, prev_latent_state, margin=1e-4) 
                         
                         total_loss += triplet_loss
                     

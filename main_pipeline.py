@@ -25,7 +25,7 @@ import yaml  # YAML 파일 처리를 위한 모듈 추가
 
 # 분리된 모듈 가져오기
 from models.motion_primitive_model import MotionPrimitiveModel
-from utils.visualization import visualize_trajectories
+from utils.visualization import visualize_from_dataset, evaluate_and_visualize_trajectories
 from utils.test_data import create_test_data
 
 # 데이터 파이프라인 가져오기
@@ -290,22 +290,6 @@ def main():
         dataloader=loader  # 기존에 생성된 데이터로더 전달
     )
     
-    # 다이나믹스 모델은 학습 없이 초기화
-    print("\n다이나믹스 모델 초기화 (학습 없음)...")
-    
-    # 잠재 다이나믹스 초기화 (오일러 적분용)
-    print("단순 오일러 적분 기반 잠재 다이나믹스 모델 초기화 완료")
-    model.latent_dynamics.delta_t = 1.0
-    ld_losses = [0.0]  # 더미 손실값
-    
-    # 상태 다이나믹스 초기화 (오일러 적분용)
-    print("단순 오일러 적분 기반 상태 다이나믹스 모델 초기화 완료")
-    model.state_dynamics.delta_t = 1.0
-    if model.dynamical_system_order == 2:
-        model.state_dynamics.damping = 0.1
-    sd_losses = {"total": [0.0], "pos": [0.0]}
-    if model.dynamical_system_order == 2:
-        sd_losses["vel"] = [0.0]
     
     # 모델 저장
     os.makedirs(args.save_dir, exist_ok=True)
@@ -326,61 +310,89 @@ def main():
         
         # 시각화 설정 파라미터
         viz_params = {
-            'max_samples': 6,  # 최대 샘플 수
-            'n_samples_per_primitive': 3,  # 프리미티브당 샘플 수
-            'steps': 100  # 궤적 생성 스텝 수
+            'n_samples': 5,  # 각 궤적당 샘플 포인트 수
+            'steps': 100,    # 궤적 생성 스텝 수
+            'sample_radius': 0.1  # 시작점 주변 샘플링 반경
         }
         
         # YAML 설정 파일에서 시각화 설정 적용
         if args.config:
-            with open(args.config, 'r',encoding='utf-8') as file:
+            with open(args.config, 'r', encoding='utf-8') as file:
                 config = yaml.safe_load(file)
             
             if 'visualization' in config:
                 viz_config = config['visualization']
-                if 'max_samples' in viz_config:
-                    viz_params['max_samples'] = viz_config['max_samples']
-                if 'n_samples_per_primitive' in viz_config:
-                    viz_params['n_samples_per_primitive'] = viz_config['n_samples_per_primitive']
-                if 'steps' in viz_config:
-                    viz_params['steps'] = viz_config['steps']
-          # 테스트 데이터 생성
-        from utils.test_data import create_test_data
-        states, primitive_types = create_test_data(
-            n_primitives=n_primitives,
-            n_samples_per_primitive=viz_params['n_samples_per_primitive'],
-            workspace_dim=args.workspace_dim,
-            order=args.order,
-            device=model.device
-        )
+                if 'dataset_visualization' in viz_config:
+                    dataset_viz_config = viz_config['dataset_visualization']
+                    viz_params.update(dataset_viz_config)
         
-        # 테스트 샘플 선택
-        n_test = min(viz_params['max_samples'], n_primitives * viz_params['n_samples_per_primitive'])
-        test_indices = []
-        for p in range(n_primitives):
-            # 각 프리미티브에서 n_samples_per_primitive개씩 샘플 선택
-            prim_indices = torch.where(primitive_types == p)[0][:viz_params['n_samples_per_primitive']]
-            test_indices.extend(prim_indices.tolist())
-        
-        test_indices = test_indices[:n_test]  # 총 샘플 수 제한
-        test_states = states[test_indices]
-        test_prims = primitive_types[test_indices]
-        
-        # 잠재 공간 궤적
-        plt_latent = visualize_trajectories(
-            model, test_states, test_prims, steps=viz_params['steps'], latent=True,
-            title="잠재 공간에서 생성된 궤적"
-        )
-        plt_latent.savefig(os.path.join(args.save_dir, "latent_trajectories.png"))
-        
-        # 상태 공간 궤적
-        plt_state = visualize_trajectories(
-            model, test_states, test_prims, steps=viz_params['steps'], latent=False,
-            title="상태 공간에서 생성된 궤적"
-        )
-        plt_state.savefig(os.path.join(args.save_dir, "state_trajectories.png"))
-        
+        # 데이터셋 기반 궤적 시각화
+        if viz_params.get('enable', True):
+            print("\n데이터셋 기반 궤적 시각화 중...")
+            
+            # 프리미티브와 궤적 ID 설정
+            primitive_ids = viz_params.get('primitive_ids', [0])
+            trajectory_ids = viz_params.get('trajectory_ids', [0])
+            
+            # 각 프리미티브/궤적 조합에 대해 시각화
+            for prim_id in primitive_ids:
+                for traj_id in trajectory_ids:
+                    
+                    print(f"프리미티브 {prim_id}, 궤적 {traj_id} 시각화 중...")
+                    
+                    # 데이터셋에서 궤적 가져와서 시각화
+                    save_path = os.path.join(args.save_dir, f"dataset_traj_prim{prim_id}_traj{traj_id}.png")
+                    visualize_from_dataset(
+                        model=model,
+                        dataset=preprocessed_data,
+                        prim_id=prim_id,
+                        traj_id=traj_id,
+                        n_samples=viz_params['n_samples'],
+                        steps=viz_params['steps'],
+                        sample_radius=viz_params['sample_radius'],
+                        save_path=save_path,
+                        show_original=True
+                    )
+                    print(f"  - 파일 저장됨: {save_path}")
+                
+                    
+                        
         print(f"궤적 시각화가 {args.save_dir}에 저장됨")
+        
+        # 일괄 평가 기능 - 여러 프리미티브와 궤적에 대한 평가
+        if 'batch_evaluation' in config.get('visualization', {}):
+            batch_eval_config = config['visualization']['batch_evaluation']
+            if batch_eval_config.get('enable', False):
+                print("\n일괄 궤적 평가 및 시각화 중...")
+                
+                # 평가 디렉토리 설정
+                eval_dir = os.path.join(args.save_dir, 'trajectory_evaluation')
+                os.makedirs(eval_dir, exist_ok=True)
+                
+                # 설정 파일에서 파라미터 가져오기
+                prim_ids = batch_eval_config.get('primitive_ids', None)  # None이면 모든 프리미티브
+                traj_per_prim = batch_eval_config.get('trajectories_per_primitive', 3)
+                n_samples = batch_eval_config.get('n_samples', 5)
+                steps = batch_eval_config.get('steps', 100)
+                sample_radius = batch_eval_config.get('sample_radius', 0.1)
+                seed = batch_eval_config.get('seed', None)
+                
+                # 일괄 평가 실행
+                try:
+                    evaluate_and_visualize_trajectories(
+                        model=model,
+                        dataset=preprocessed_data,
+                        save_dir=eval_dir,
+                        prim_ids=prim_ids,
+                        traj_per_prim=traj_per_prim,
+                        n_samples=n_samples,
+                        steps=steps,
+                        sample_radius=sample_radius,
+                        seed=seed
+                    )
+                    print(f"일괄 평가 완료. 결과 저장 위치: {eval_dir}")
+                except Exception as e:
+                    print(f"일괄 평가 중 오류 발생: {e}")
 
 
 if __name__ == "__main__":

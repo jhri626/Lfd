@@ -195,6 +195,8 @@ class DataPipeline:
             print(f"  프리미티브 ID: {params.selected_primitives_ids}")
             print(f"  작업 공간 차원: {params.workspace_dimensions}")
             print(f"  동역학계 차수: {params.dynamical_system_order}")
+            print(f"  trajectories_resample_length: {params.trajectories_resample_length}")
+            print(f"  imitation_window_size: {params.imitation_window_size}")
         
     def load_and_preprocess(self):
         """
