@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import os
 import numpy as np
+import submodule.BCSDM.utils.R2_functions as R2
 from typing import Union, Optional, List, Dict, Tuple, Any
 
 
@@ -98,7 +99,7 @@ class LatentDynamics(nn.Module):
         else:
             # 이미 원핫 또는 소프트맥스 형태
             return primitive_type    
-    def forward(self, z: torch.Tensor, primitive_type: torch.Tensor) -> torch.Tensor:
+    def forward(self, z: torch.Tensor, latent_traj: torch.Tensor, primitive_type: torch.Tensor) -> torch.Tensor:
         """
         순전파: 현재 잠재 상태로부터 다음 상태 예측
         
@@ -126,15 +127,18 @@ class LatentDynamics(nn.Module):
             idx = torch.argmax(primitive_type, dim=1)
         else:
             idx = primitive_type
-            
-        goal_latent = self.goals_latent[idx.long()]
         
-        # 단순 오일러 적분을 위한 변화량 계산
-        # 1. 선형 항: 현재 상태와 목표 상태 간의 차이
-        delta_z_linear = goal_latent - z
+        
+        zdot_traj = latent_traj[:,1:]-latent_traj[:,:-1]
+        zdot_traj = torch.cat([zdot_traj, zdot_traj.new_zeros(zdot_traj.size(0), 1, zdot_traj.size(2))], dim=1)
+        print(z.shape)
+        print(latent_traj.shape)
+        print(zdot_traj.shape)
+        
+        zdot = R2.gvf_R2(z, self.scale_factor, latent_traj, zdot_traj)
         
         # 2. 오일러 적분 수행
-        z_next = z + delta_z_linear * self.delta_t
+        z_next = z + zdot * self.delta_t
         
         return z_next
     

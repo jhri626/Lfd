@@ -125,10 +125,13 @@ class TrajectoryDataset(Dataset):
         window_current = self.demos[traj, t]  # (dim_ws, window)        
         
         # 전체 궤적 데이터 추출 - 이 궤적에 해당하는 모든 윈도우
-        full_trajectory = self.demos[traj,:,:,0]  # (n_steps, dim_ws)
+        full_position = self.demos[traj,:,:,0]  # (n_steps, dim_ws)
+          # (n_steps, dim_ws)
         
         # 시스템 차수가 2차인 경우 속도 계산 및 추가
         if self.order == 2:
+            full_velocity = (self.demos[traj,:,:,1] - full_position) /self.delta_t
+            full_trajectory = torch.cat((full_position, full_velocity), dim=1)  # (n_steps, dim_ws * 2)
             if t < self.n_steps - 2:  # 다음 스텝이 존재하는 경우
                 next_state = self.demos[traj, t + 1]
                 velocity = (next_state - window_current) / self.delta_t

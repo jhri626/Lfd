@@ -277,7 +277,7 @@ class MotionPrimitiveModel:
                     
                     # latent dynamics 손실 (첫 번째 스텝 제외)
                     if t > 0:
-                        latent_in_latent = self.latent_dynamics(latent_in_latent, batch_prims)
+                        latent_in_latent = self.latent_dynamics(latent_in_latent,batch_full_trajectories ,batch_prims)
                         latent_loss = nn.functional.mse_loss(latent_state, latent_in_latent)
                         total_loss += latent_loss
                         
