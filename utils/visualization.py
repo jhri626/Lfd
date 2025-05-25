@@ -127,7 +127,10 @@ def visualize_from_dataset(
     # 전체 궤적 데이터 준비 (위치 + 속도)
     if order == 2 and window > 1:
         # 위치와 속도 데이터 추출
+        print("orig_trajectory shape:", orig_trajectory.shape)
         orig_positions = orig_trajectory[:, :, 0]  # (n_steps, dim_ws)
+        print("orig_positions:", orig_trajectory[0,:, 0])
+        print("orig_positions:", orig_trajectory[0,:, 1])
         velocities = orig_trajectory[:, :, 1] - orig_trajectory[:, :, 0] if window > 1 else np.zeros_like(orig_positions)  # (n_steps, dim_ws)
         
         # 정규화 파라미터 준비
@@ -151,6 +154,7 @@ def visualize_from_dataset(
     
       # 3. 시작점(첫 번째 상태) 근처에서 n개의 포인트 샘플링
     start_state = orig_states[0]  # 첫 번째 상태 (위치 + 속도)
+    print("start_state:", start_state)
     
     # 샘플링된 초기 상태 저장 텐서
     sampled_states = torch.zeros(n_samples, model.dim_state, device=model.device)
@@ -167,21 +171,12 @@ def visualize_from_dataset(
         # 속도 샘플링 (시작 속도 기준)
         random_vel_offsets = torch.randn(n_samples, dim_ws, device=model.device) * (sample_radius * 0.01)
         sampled_velocities = torch.tensor(start_vel, device=model.device).unsqueeze(0) + random_vel_offsets
-        
-        # 속도 정규화
-        sampled_velocities_normalized = normalize_state(
-            sampled_velocities.cpu().numpy(), 
-            vel_min_expanded, 
-            vel_max_expanded
-        )
-        print(vel_min_expanded,vel_max_expanded)
-        print(sampled_velocities)
-        print(sampled_velocities_normalized)
-        sampled_velocities_normalized = torch.from_numpy(sampled_velocities_normalized).to(device=model.device)
+    
+
             
         # 정규화된 상태 구성
         sampled_states[:, :dim_ws] = sampled_positions
-        sampled_states[:, dim_ws:] = sampled_velocities_normalized
+        sampled_states[:, dim_ws:] = sampled_velocities
     else:
         # 1차 시스템: 위치만 샘플링
         random_offsets = torch.randn(n_samples, dim_ws, device=model.device) * sample_radius
@@ -189,12 +184,12 @@ def visualize_from_dataset(
         sampled_states[:, :dim_ws] = sampled_positions
     
     # 2. 모델에 정규화 파라미터 설정
-    vel_min = torch.from_numpy(dataset['vel min train'].reshape(1, -1, 1)).float().to(model.device)
-    vel_max = torch.from_numpy(dataset['vel max train'].reshape(1, -1, 1)).float().to(model.device)
+    vel_min = torch.from_numpy(dataset['vel min train'].reshape(1, -1)).float().to(model.device)
+    vel_max = torch.from_numpy(dataset['vel max train'].reshape(1, -1)).float().to(model.device)
 
     if 'acc min train' in dataset and 'acc max train' in dataset:
-        acc_min = torch.from_numpy(dataset['acc min train'].reshape(1, -1, 1)).float().to(model.device)
-        acc_max = torch.from_numpy(dataset['acc max train'].reshape(1, -1, 1)).float().to(model.device)
+        acc_min = torch.from_numpy(dataset['acc min train'].reshape(1, -1)).float().to(model.device)
+        acc_max = torch.from_numpy(dataset['acc max train'].reshape(1, -1)).float().to(model.device)
         model.set_normalization_params(vel_min, vel_max, acc_min, acc_max)
     else:
         model.set_normalization_params(vel_min, vel_max)
@@ -202,7 +197,7 @@ def visualize_from_dataset(
     # 4. 각 샘플 포인트에서 모델을 통해 궤적 생성
     # 모든 샘플에 동일한 프리미티브 ID 할당
     sampled_prim_ids = torch.full((n_samples,), prim_id, dtype=torch.long, device=model.device)
-    print(sampled_states)
+    
     state_traj=[sampled_states]
     states=sampled_states
     # 모델을 통해 궤적 생성

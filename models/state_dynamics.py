@@ -52,16 +52,16 @@ class StateDynamics(nn.Module):
         
         # 목표점 저장 버퍼
         self.register_buffer(
-            "goals", torch.zeros(n_primitives, workspace_dim, device=self.device)
+            "goals", torch.zeros(n_primitives, workspace_dim * dynamical_system_order, device=self.device)
         )        # 네트워크 부분 제거: 단순 오일러 적분만 수행
         # 더이상 MLP를 사용하지 않음 - 직접 목표 위치와 현재 상태의 차이를 통해 계산
         
         # 상태 정규화/비정규화를 위한 버퍼
         # 속도 및 가속도 최소/최대값
-        self.register_buffer("vel_min", torch.zeros(1, workspace_dim, 1, device=self.device))
-        self.register_buffer("vel_max", torch.zeros(1, workspace_dim, 1, device=self.device))
-        self.register_buffer("acc_min", torch.zeros(1, workspace_dim, 1, device=self.device))
-        self.register_buffer("acc_max", torch.zeros(1, workspace_dim, 1, device=self.device))
+        self.register_buffer("vel_min", torch.zeros(1, workspace_dim,  device=self.device))
+        self.register_buffer("vel_max", torch.zeros(1, workspace_dim,  device=self.device))
+        self.register_buffer("acc_min", torch.zeros(1, workspace_dim,  device=self.device))
+        self.register_buffer("acc_max", torch.zeros(1, workspace_dim,  device=self.device))
         
         # 시간 간격
         self.delta_t = 1.0
@@ -101,9 +101,7 @@ class StateDynamics(nn.Module):
         Returns:
             (B, workspace_dim) 정규화된 속도 [-1, 1]
         """
-        # 3차원으로 변환: (B, D) -> (B, D, 1)
-        if velocity.dim() == 2:
-            velocity = velocity.unsqueeze(-1)
+        
             
         # 정규화
         return 2.0 * (velocity - self.vel_min) / (self.vel_max - self.vel_min) - 1.0
@@ -119,14 +117,12 @@ class StateDynamics(nn.Module):
             (B, workspace_dim) 원래 스케일의 속도
         """
         # 3차원으로 변환: (B, D) -> (B, D, 1)
-        if velocity_norm.dim() == 2:
-            velocity_norm = velocity_norm.unsqueeze(-1)
             
         # 비정규화
         velocity = 0.5 * (velocity_norm + 1.0) * (self.vel_max - self.vel_min) + self.vel_min
         
         # 원래 차원으로 되돌리기
-        return velocity.squeeze(-1)
+        return velocity
     
     def normalize_acceleration(self, acceleration: torch.Tensor) -> torch.Tensor:
         """
@@ -138,9 +134,7 @@ class StateDynamics(nn.Module):
         Returns:
             (B, workspace_dim) 정규화된 가속도 [-1, 1]
         """
-        # 3차원으로 변환: (B, D) -> (B, D, 1)
-        if acceleration.dim() == 2:
-            acceleration = acceleration.unsqueeze(-1)
+
             
         # 정규화
         return 2.0 * (acceleration - self.acc_min) / (self.acc_max - self.acc_min) - 1.0
@@ -155,14 +149,11 @@ class StateDynamics(nn.Module):
         Returns:
             (B, workspace_dim) 원래 스케일의 가속도
         """
-        # 3차원으로 변환: (B, D) -> (B, D, 1)
-        if acceleration_norm.dim() == 2:
-            acceleration_norm = acceleration_norm.unsqueeze(-1)
-              # 비정규화
+        
         acceleration = 0.5 * (acceleration_norm + 1.0) * (self.acc_max - self.acc_min) + self.acc_min
         
         # 원래 차원으로 되돌리기
-        return acceleration.squeeze(-1)
+        return acceleration
         
     def forward(self, x: torch.Tensor, dx: torch.Tensor, primitive_type: torch.Tensor) -> torch.Tensor:
         """
@@ -209,9 +200,10 @@ class StateDynamics(nn.Module):
             
             vel_t_denorm = self.denormalize_velocity(vel_t)
             acc_t_denorm = self.denormalize_acceleration(acc_t)
+       
             
             # 오일러 적분
-            vel_tp1_denorm = vel_t_denorm + acc_t_denorm * self.delta_t
+            vel_tp1_denorm = vel_t_denorm + acc_t_denorm * self.delta_t   
             pos_tp1 = pos_t + vel_t_denorm * self.delta_t
             
             # 속도 다시 정규화 (상태 벡터에 저장하기 위해)
@@ -323,6 +315,7 @@ class StateDynamics(nn.Module):
         assert goals.shape == self.goals.shape, \
             f"Expected shape {self.goals.shape}, got {goals.shape}"
         self.goals.copy_(goals)
+        
     def compute_loss(self, x_t: torch.Tensor, x_tp1: torch.Tensor, 
                     primitive_type: torch.Tensor) -> Dict[str, torch.Tensor]:
         """

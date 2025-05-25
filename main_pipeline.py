@@ -205,18 +205,17 @@ def main():
         model.load_pretrained_encoder(args.encoder_path)
         print(f"인코더가 {args.encoder_path}에서 로드됨")
         
-    # 목표 설정 (데이터에서 가져오기)
-    goals = torch.from_numpy(preprocessed_data['goals training']).float().to(model.device)
-    model.set_goals(goals)
+    
     
     # 속도/가속도 정규화 파라미터 (데이터셋에서 가져옴)
-    vel_min = torch.from_numpy(preprocessed_data['vel min train'].reshape(1, -1, 1)).float().to(model.device)
-    vel_max = torch.from_numpy(preprocessed_data['vel max train'].reshape(1, -1, 1)).float().to(model.device)
+    vel_min = torch.from_numpy(preprocessed_data['vel min train'].reshape(1, -1)).float().to(model.device)
+    vel_max = torch.from_numpy(preprocessed_data['vel max train'].reshape(1, -1)).float().to(model.device)
+    
     
     if args.order == 2:
         if 'acc min train' in preprocessed_data and 'acc max train' in preprocessed_data:
-            acc_min = torch.from_numpy(preprocessed_data['acc min train'].reshape(1, -1, 1)).float().to(model.device)
-            acc_max = torch.from_numpy(preprocessed_data['acc max train'].reshape(1, -1, 1)).float().to(model.device)
+            acc_min = torch.from_numpy(preprocessed_data['acc min train'].reshape(1, -1)).float().to(model.device)
+            acc_max = torch.from_numpy(preprocessed_data['acc max train'].reshape(1, -1)).float().to(model.device)
         else:
             print("가속도 정규화 파라미터가 없어 기본값을 사용합니다.")
             acc_min = torch.full((1, args.workspace_dim, 1), -1.0, device=model.device)
@@ -224,7 +223,19 @@ def main():
             
         model.set_normalization_params(vel_min, vel_max, acc_min, acc_max)
     else:
-        model.set_normalization_params(vel_min, vel_max)          # 옵티마이저 설정을 위한 파라미터 준비 (인코더와 디코더만)
+        model.set_normalization_params(vel_min, vel_max)          
+    
+    # 목표 설정 (데이터에서 가져오기)
+    goals = torch.from_numpy(preprocessed_data['goals training']).float().to(model.device)
+    goals_vel = torch.zeros_like(goals, device=model.device)  # 속도 목표 초기화
+    
+    if args.order == 2:
+        goals_vel = (goals_vel - vel_min) / (vel_max - vel_min) * 2 - 1  
+        goals = torch.cat((goals, goals_vel), dim=-1)  
+    model.set_goals(goals)
+    
+    
+    
     optimizer_params = {
         'lr_encoder': 1e-3,
         'lr_decoder': 1e-3,
@@ -298,9 +309,9 @@ def main():
     plt.figure(figsize=(6, 4))
     
     plt.plot(ae_losses)
-    plt.title('오토인코더 손실')
-    plt.xlabel('에포크')
-    plt.ylabel('손실')
+    plt.title('autoencoder training loss')
+    plt.xlabel('epoch')
+    plt.ylabel('loss')
     
     plt.tight_layout()
     plt.savefig(os.path.join(args.save_dir, "training_losses.png"))
