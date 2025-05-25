@@ -353,6 +353,7 @@ def main():
                     
                     # 데이터셋에서 궤적 가져와서 시각화
                     save_path = os.path.join(args.save_dir, f"dataset_traj_prim{prim_id}_traj{traj_id}.png")
+                    latent_save_path = os.path.join(args.save_dir, f"dataset_latent_traj_prim{prim_id}_traj{traj_id}.png")
                     visualize_from_dataset(
                         model=model,
                         dataset=preprocessed_data,
@@ -362,6 +363,7 @@ def main():
                         steps=viz_params['steps'],
                         sample_radius=viz_params['sample_radius'],
                         save_path=save_path,
+                        latent_save_path= latent_save_path,
                         show_original=True
                     )
                     print(f"  - 파일 저장됨: {save_path}")

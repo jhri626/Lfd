@@ -51,6 +51,7 @@ def visualize_from_dataset(
     steps: int = 100,
     sample_radius: float = 0.1,
     save_path: Optional[str] = None,
+    latent_save_path: Optional[str] = None,
     title: Optional[str] = None,
     show_original: bool = True,
     seed: Optional[int] = None
@@ -200,13 +201,25 @@ def visualize_from_dataset(
     
     state_traj=[sampled_states]
     states=sampled_states
+    
+    latent_demo = []
+    latent_sample =[]
     # 모델을 통해 궤적 생성
-    for _ in range(steps):
+    for t in range(steps):
         latent_state = model.encoder(states, sampled_prim_ids)
+        latent_state_traj = model.encoder(torch.from_numpy(orig_states[t]).to(dtype=next(model.parameters()).dtype), sampled_prim_ids)
+        
         decoder_out= model.decoder(latent_state,sampled_prim_ids)
+        
+        latent_demo.append(latent_state_traj)
+        latent_sample.append(latent_state)
+        
         task_state = model.state_dynamics(states,decoder_out,sampled_prim_ids)
         states = task_state
+        
         state_traj.append(states)
+
+        
         
     state_traj = torch.stack(state_traj, dim=1)  # (n_samples, steps, dim_state)
     # 5. 시각화
@@ -311,6 +324,8 @@ def visualize_from_dataset(
     # 목표점 그리기
     goals = model.state_dynamics.goals.cpu().numpy()
     prim_goal = goals[prim_id]
+    latent_goal = model.encoder(torch.tensor(prim_goal, device=model.device).unsqueeze(0), torch.tensor([prim_id], device=model.device)).detach().cpu().numpy().squeeze(0)
+
     
     if dim_ws == 2:
         ax.plot(
@@ -349,8 +364,73 @@ def visualize_from_dataset(
     if save_path is not None:
         plt.savefig(save_path)
         print(f"Figure saved: {save_path}")
+        
+        
+    # 1. Stack latent trajectories into tensors
+    # latent_demo/list: steps long, each (n_samples, dim_latent)
+    latent_demo_tensor = torch.stack(latent_demo, dim=0)   # shape: (steps, dim_latent)
     
-    return fig
+    latent_sample_tensor = torch.stack(latent_sample, dim=1)  # same shape
+    
+    # 2. Define all unique pairs of latent dimensions
+    # For 4 latent dims, combinations of 2: (0,1),(0,2),(0,3),(1,2),(1,3),(2,3)
+    dim_pairs = [(i, j) for i in range(latent_demo_tensor.size(-1))
+                        for j in range(i+1, latent_demo_tensor.size(-1))]
+
+    # 3. Create a 2x3 grid of subplots
+    fig_latent, axes = plt.subplots(2, 3, figsize=(18, 12))
+    axes = axes.flatten()
+    print(latent_demo_tensor.shape)
+    # 4. Plot each pair in its subplot
+    for idx, (d1, d2) in enumerate(dim_pairs):
+        ax_sub = axes[idx]
+        for i in range(n_samples):
+            color = colors[i % len(colors)]
+            # extract step trajectories for sample i
+            traj_demo   = latent_demo_tensor.squeeze(0).detach().cpu().numpy()    # (steps, dim_latent)
+            traj_sample = latent_sample_tensor[i].detach().cpu().numpy()
+            print(traj_demo.shape)
+            print(traj_sample.shape)
+
+            # plot demo trajectory as dashed line
+            ax_sub.plot(
+                traj_demo[:, d1], traj_demo[:, d2],
+                linestyle='--', marker='.', markersize=3,
+                alpha=0.8, color=color,
+                label=f'Demo {i+1}' if idx == 0 else None
+            )
+            # plot sample trajectory as solid line
+            ax_sub.plot(
+                traj_sample[:, d1], traj_sample[:, d2],
+                linestyle='-', marker='.', markersize=3,
+                alpha=0.8, color=color,
+                label=f'Sample {i+1}' if idx == 0 else None
+            )
+            # goal plotting
+            ax_sub.plot(
+            latent_goal[d1], 
+            latent_goal[d2], 
+            '*', 
+            color='green', 
+            markersize=15, 
+            label=f'Goal (Primitive {prim_id})'
+            )
+
+        ax_sub.set_xlabel(f'Latent dim {d1}')
+        ax_sub.set_ylabel(f'Latent dim {d2}')
+        ax_sub.set_title(f'Dims {d1} vs {d2}')
+        ax_sub.grid(True)
+
+    # show legend only on the first subplot
+    axes[0].legend(loc='best')
+
+    # 5. Adjust layout and optionally save
+    fig_latent.tight_layout()
+    if latent_save_path is not None:
+        plt.savefig(latent_save_path)
+
+    
+    return fig , fig_latent
 
 
 def evaluate_and_visualize_trajectories(

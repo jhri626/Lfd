@@ -19,7 +19,7 @@ from models.latent_dynamics import LatentDynamics
 from models.state_dynamics import StateDynamics
 
 
-class MotionPrimitiveModel:
+class MotionPrimitiveModel(nn.Module):
     """
     동작 원시 학습 및 생성을 위한 통합 모델
 
@@ -53,6 +53,7 @@ class MotionPrimitiveModel:
             decoder_hidden_sizes: 디코더 은닉층 크기 목록
             device: 계산 장치
         """
+        super(MotionPrimitiveModel, self).__init__()  # register module
         self.device = torch.device(device) if isinstance(device, str) else device
         self.dim_state = dim_state
         self.latent_dim = latent_dim
@@ -106,26 +107,12 @@ class MotionPrimitiveModel:
         self.encoder_optimizer = None
         self.decoder_optimizer = None
 
-    def configure_optimizers(
-        self, 
-        lr_encoder: float = 1e-4,
-        lr_decoder: float = 1e-4, 
-        weight_decay: float = 1e-5
-    ):
-        """
-        옵티마이저 설정 (인코더와 디코더만 학습)
-
-        Args:
-            lr_encoder: 인코더 학습률
-            lr_decoder: 디코더 학습률
-            weight_decay: 가중치 감쇠
-        """
-        self.encoder_optimizer = optim.Adam(
-            self.encoder.parameters(), lr=lr_encoder, weight_decay=weight_decay
-        )
-        self.decoder_optimizer = optim.Adam(
-            self.decoder.parameters(), lr=lr_decoder, weight_decay=weight_decay
-        )
+    def configure_optimizers(self, lr_encoder=1e-4, lr_decoder=1e-4, weight_decay=1e-5):
+        """Set up optimizers for encoder and decoder."""
+        self.encoder_optimizer = optim.Adam(self.encoder.parameters(),
+                                            lr=lr_encoder, weight_decay=weight_decay)
+        self.decoder_optimizer = optim.Adam(self.decoder.parameters(),
+                                            lr=lr_decoder, weight_decay=weight_decay)
         # dynamics 모델 학습 제거
 
     def set_goals(self, goals: torch.Tensor):
@@ -446,17 +433,9 @@ class MotionPrimitiveModel:
                 
         return state_traj
 
-    def save_models(self, save_dir: str):
-        """
-        모든 모델 저장
-
-        Args:
-            save_dir: 저장 디렉토리
-        """
+    def save_models(self, save_dir):
         os.makedirs(save_dir, exist_ok=True)
-        
-        torch.save(self.encoder.state_dict(), os.path.join(save_dir, "encoder.pt"))
-        torch.save(self.decoder.state_dict(), os.path.join(save_dir, "decoder.pt"))
+        torch.save(self.state_dict(), os.path.join(save_dir, "model.pt"))
         
         print(f"모든 모델이 {save_dir}에 저장됨")
 
