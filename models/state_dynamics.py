@@ -204,6 +204,9 @@ class StateDynamics(nn.Module):
             acc_t= dx[:, self.workspace_dim:]
             
             # 정규화된 속도와 가속도를 실제 물리량으로 변환 (필요한 경우)
+            vel_t = torch.clamp(vel_t, -1.0, 1.0)  # 속도를 [-1, 1] 범위로 클리핑
+            acc_t = torch.clamp(acc_t, -1.0, 1.0)
+            
             vel_t_denorm = self.denormalize_velocity(vel_t)
             acc_t_denorm = self.denormalize_acceleration(acc_t)
             

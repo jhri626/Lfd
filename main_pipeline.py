@@ -354,45 +354,8 @@ def main():
                         show_original=True
                     )
                     print(f"  - 파일 저장됨: {save_path}")
-                
-                    
-                        
         print(f"궤적 시각화가 {args.save_dir}에 저장됨")
         
-        # 일괄 평가 기능 - 여러 프리미티브와 궤적에 대한 평가
-        if 'batch_evaluation' in config.get('visualization', {}):
-            batch_eval_config = config['visualization']['batch_evaluation']
-            if batch_eval_config.get('enable', False):
-                print("\n일괄 궤적 평가 및 시각화 중...")
-                
-                # 평가 디렉토리 설정
-                eval_dir = os.path.join(args.save_dir, 'trajectory_evaluation')
-                os.makedirs(eval_dir, exist_ok=True)
-                
-                # 설정 파일에서 파라미터 가져오기
-                prim_ids = batch_eval_config.get('primitive_ids', None)  # None이면 모든 프리미티브
-                traj_per_prim = batch_eval_config.get('trajectories_per_primitive', 3)
-                n_samples = batch_eval_config.get('n_samples', 5)
-                steps = batch_eval_config.get('steps', 100)
-                sample_radius = batch_eval_config.get('sample_radius', 0.1)
-                seed = batch_eval_config.get('seed', None)
-                
-                # 일괄 평가 실행
-                try:
-                    evaluate_and_visualize_trajectories(
-                        model=model,
-                        dataset=preprocessed_data,
-                        save_dir=eval_dir,
-                        prim_ids=prim_ids,
-                        traj_per_prim=traj_per_prim,
-                        n_samples=n_samples,
-                        steps=steps,
-                        sample_radius=sample_radius,
-                        seed=seed
-                    )
-                    print(f"일괄 평가 완료. 결과 저장 위치: {eval_dir}")
-                except Exception as e:
-                    print(f"일괄 평가 중 오류 발생: {e}")
 
 
 if __name__ == "__main__":

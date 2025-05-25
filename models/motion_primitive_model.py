@@ -262,6 +262,7 @@ class MotionPrimitiveModel:
                 
                 # 초기화 
                 total_loss = 0.0
+                triplet_gain = 0.4
                 
                 # 순차 처리 대신 배치로 처리 (PyTorch 효율적 처리)
                 # 시작 위치는 항상 윈도우의 첫 번째 위치
@@ -276,6 +277,7 @@ class MotionPrimitiveModel:
                     # 인코딩
                     latent_state = self.encoder(states, batch_prims)  # (B, latent_dim)
                     latent_in_latent = latent_state
+                    goal_latent = self.compute_goal_latent()  # (B, latent_dim)
                     
                     # latent dynamics 손실 (첫 번째 스텝 제외)
                     if t > 0:
@@ -284,9 +286,9 @@ class MotionPrimitiveModel:
                         total_loss += latent_loss
                         
                         triplet_loss = nn.functional.triplet_margin_loss(
-                            self.latent_dynamics.goals_latent[batch_prims.long()], latent_state, prev_latent_state, margin=1e-4) 
+                            goal_latent, latent_state, prev_latent_state, margin=1e-4) 
                         
-                        total_loss += triplet_loss
+                        total_loss += triplet_gain * triplet_loss
                     
                     # 디코딩 및 상태 동역학
                     decoder_out = self.decoder(latent_state, batch_prims)  # (B, dim_state)
@@ -455,7 +457,17 @@ class MotionPrimitiveModel:
         
         torch.save(self.encoder.state_dict(), os.path.join(save_dir, "encoder.pt"))
         torch.save(self.decoder.state_dict(), os.path.join(save_dir, "decoder.pt"))
-        torch.save(self.latent_dynamics.state_dict(), os.path.join(save_dir, "latent_dynamics.pt"))
-        torch.save(self.state_dynamics.state_dict(), os.path.join(save_dir, "state_dynamics.pt"))
         
         print(f"모든 모델이 {save_dir}에 저장됨")
+
+    def compute_goal_latent(self):
+        """
+        상태 다이나믹스의 goal을 encoder에 통과시켜 goal_latent를 계산합니다.
+        """
+        # 상태 다이나믹스의 goal 가져오기
+        goals = self.state_dynamics.goals  # (n_primitives, workspace_dim)
+
+        # goal을 encoder에 통과시켜 goal_latent 계산
+        goal_latent = self.encoder(goals, torch.arange(self.n_primitives, device=self.device))  # (n_primitives, latent_dim)
+
+        return goal_latent

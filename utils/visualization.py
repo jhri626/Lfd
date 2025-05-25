@@ -188,6 +188,17 @@ def visualize_from_dataset(
         sampled_positions = torch.tensor(start_state, device=model.device).unsqueeze(0) + random_offsets
         sampled_states[:, :dim_ws] = sampled_positions
     
+    # 2. 모델에 정규화 파라미터 설정
+    vel_min = torch.from_numpy(dataset['vel min train'].reshape(1, -1, 1)).float().to(model.device)
+    vel_max = torch.from_numpy(dataset['vel max train'].reshape(1, -1, 1)).float().to(model.device)
+
+    if 'acc min train' in dataset and 'acc max train' in dataset:
+        acc_min = torch.from_numpy(dataset['acc min train'].reshape(1, -1, 1)).float().to(model.device)
+        acc_max = torch.from_numpy(dataset['acc max train'].reshape(1, -1, 1)).float().to(model.device)
+        model.set_normalization_params(vel_min, vel_max, acc_min, acc_max)
+    else:
+        model.set_normalization_params(vel_min, vel_max)
+
     # 4. 각 샘플 포인트에서 모델을 통해 궤적 생성
     # 모든 샘플에 동일한 프리미티브 ID 할당
     sampled_prim_ids = torch.full((n_samples,), prim_id, dtype=torch.long, device=model.device)

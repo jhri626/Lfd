@@ -69,7 +69,20 @@ def main() -> None:
     preprocessed_data = load_preprocessed_data(args.data_cache)
 
     # ---------------------------------------------------------------------
-    # 2. Default visualization hyper-parameters
+    # 2. Set normalization parameters for the model
+    # ---------------------------------------------------------------------
+    vel_min = torch.from_numpy(preprocessed_data['vel min train'].reshape(1, -1, 1)).float().to(model.device)
+    vel_max = torch.from_numpy(preprocessed_data['vel max train'].reshape(1, -1, 1)).float().to(model.device)
+
+    if 'acc min train' in preprocessed_data and 'acc max train' in preprocessed_data:
+        acc_min = torch.from_numpy(preprocessed_data['acc min train'].reshape(1, -1, 1)).float().to(model.device)
+        acc_max = torch.from_numpy(preprocessed_data['acc max train'].reshape(1, -1, 1)).float().to(model.device)
+        model.set_normalization_params(vel_min, vel_max, acc_min, acc_max)
+    else:
+        model.set_normalization_params(vel_min, vel_max)
+
+    # ---------------------------------------------------------------------
+    # 3. Default visualization hyper-parameters
     # ---------------------------------------------------------------------
     viz_params = {
         "n_samples": 5,  # Samples per trajectory
@@ -81,7 +94,7 @@ def main() -> None:
     }
 
     # ---------------------------------------------------------------------
-    # 3. YAML overrides (if provided)
+    # 4. YAML overrides (if provided)
     # ---------------------------------------------------------------------
     if args.config:
         with open(args.config, "r", encoding="utf-8") as f:
@@ -99,7 +112,7 @@ def main() -> None:
         batch_cfg = {}
 
     # ---------------------------------------------------------------------
-    # 4. Individual trajectory visualizations
+    # 5. Individual trajectory visualizations
     # ---------------------------------------------------------------------
     for prim_id in viz_params["primitive_ids"]:
         for traj_id in viz_params["trajectory_ids"]:
@@ -120,7 +133,7 @@ def main() -> None:
             print(f"[INFO] Saved {fig_path}")
 
     # ---------------------------------------------------------------------
-    # 5. Optional batch-level evaluation & visualization
+    # 6. Optional batch-level evaluation & visualization
     # ---------------------------------------------------------------------
     if viz_params["batch_eval"]:
         eval_dir = os.path.join(args.save_dir, "trajectory_evaluation")

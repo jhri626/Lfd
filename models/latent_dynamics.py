@@ -74,8 +74,8 @@ class LatentDynamics(nn.Module):
         
         # 학습용 파라미터
         self.delta_t = 1.0  # 시간 간격
-          # CONDOR 호환성을 위한 추가 파라미터들
-        self.scale_factor = 1.0  # 비선형 항 스케일링 파라미터
+          
+        self.scale_factor = 4.0  # contraction factor for gvf_R2
 
     def encode_primitives(self, primitive_type: torch.Tensor) -> torch.Tensor:
         """
