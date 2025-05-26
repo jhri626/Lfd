@@ -249,8 +249,8 @@ class MotionPrimitiveModel(nn.Module):
                 
                 # 초기화 
                 total_loss = 0.0
-                latent_gain = 2.9
-                triplet_gain = 2.9
+                latent_gain = 1
+                triplet_gain = 1
                 
                 # 순차 처리 대신 배치로 처리 (PyTorch 효율적 처리)
                 # 시작 위치는 항상 윈도우의 첫 번째 위치
@@ -258,7 +258,7 @@ class MotionPrimitiveModel(nn.Module):
                 # First step
                 
                 # encoder 
-                states = batch_windows[:, :, 0] + 0.08 * torch.randn_like(batch_windows[:, :, 0])# (B, dim_ws)
+                states = batch_windows[:, :, 0] + 0.1 * torch.randn_like(batch_windows[:, :, 0]) # (B, dim_ws)
                 batch_latent_trajectories = torch.cat([self.encoder(batch_full_trajectories[:, i, :]).unsqueeze(1) for i in range(batch_full_trajectories.size(1))], dim=1)
                 
                 for t in range(window_size - 1):
@@ -274,7 +274,7 @@ class MotionPrimitiveModel(nn.Module):
                         total_loss += latent_gain * latent_loss
                         
                         triplet_loss = nn.functional.triplet_margin_loss(
-                            goal_latent, latent_state, prev_latent_state, margin=1e-4) 
+                            goal_latent, latent_state, prev_latent_state, margin=1e-2) 
                         
                         total_loss += triplet_gain * triplet_loss
                     

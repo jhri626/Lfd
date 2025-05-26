@@ -204,7 +204,7 @@ class StateDynamics(nn.Module):
             
             # 오일러 적분
             vel_tp1_denorm = vel_t_denorm + acc_t_denorm * self.delta_t   
-            pos_tp1 = pos_t + vel_t_denorm * self.delta_t
+            pos_tp1 = pos_t + vel_tp1_denorm * self.delta_t
             
             # 속도 다시 정규화 (상태 벡터에 저장하기 위해)
             
@@ -300,10 +300,12 @@ class StateDynamics(nn.Module):
         self.vel_min.copy_(vel_min)
         self.vel_max.copy_(vel_max)
         
+        
         if self.dynamical_system_order == 2:
             assert acc_min is not None and acc_max is not None, "2차 시스템은 가속도 정규화 파라미터가 필요합니다."
             self.acc_min.copy_(acc_min)
             self.acc_max.copy_(acc_max)
+            
     
     def set_goals(self, goals: torch.Tensor):
         """
