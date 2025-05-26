@@ -10,7 +10,7 @@ data:
   evaluation_samples_length: 10  # 평가 샘플 길이
   imitation_window_size: 2  # 모방 윈도우 크기
   
-  batch_size: 10  # 배치 크기
+  batch_size: 250  # 배치 크기
   use_cached_data: true  # 캐시된 데이터 사용 여부
   data_dir: "results/data"  # 데이터 저장 디렉토리
   shuffle: true  # 셔플 여부
@@ -27,8 +27,8 @@ model:
 
 # 학습 설정
 training:
-  epochs: 0  # 전체 학습 에포크 수
-  epochs_autoencoder: 0  # 오토인코더 학습 에포크
+  epochs: 10000  # 전체 학습 에포크 수
+  epochs_autoencoder: 10000  # 오토인코더 학습 에포크
   learning_rates:
     encoder: 1.0e-4  # 인코더 학습률
     decoder: 1.0e-4  # 디코더 학습률
@@ -37,7 +37,7 @@ training:
 # 경로 설정
 paths:
   save_dir: "results/model_with_viz"  # 저장 디렉토리
-  encoder_path: results\ver8\encoder_triplet_ver8.pt  # 인코더 체크포인트 경로 (null이면 새로 학습)
+  encoder_path: results/ver8/encoder_triplet_ver8.pt  # 인코더 체크포인트 경로 (null이면 새로 학습)
 
 # 시각화 설정
 visualization:
@@ -55,12 +55,12 @@ visualization:
     sampling_radius: 0.1  # 시작점 주변 샘플링 반경
     steps: 2000  # 생성할 궤적의 스텝 수
 
-# 일괄 궤적 평가 설정
-batch_evaluation:
-  enable: true  # 일괄 평가 활성화 여부
-  primitive_ids: null  # 평가할 프리미티브 ID 목록 (null이면 모든 프리미티브)
-  trajectories_per_primitive: 3  # 각 프리미티브당 평가할 궤적 수
-  n_samples: 5  # 각 궤적당 샘플링할 포인트 수
-  steps: 100  # 생성할 궤적의 스텝 수
-  sample_radius: 0.1  # 시작점 주변 샘플링 반경
-  seed: 42  # 난수 생성 시드 (재현 가능성을 위해)
+# # 일괄 궤적 평가 설정
+# batch_evaluation:
+#   enable: true  # 일괄 평가 활성화 여부
+#   primitive_ids: null  # 평가할 프리미티브 ID 목록 (null이면 모든 프리미티브)
+#   trajectories_per_primitive: 3  # 각 프리미티브당 평가할 궤적 수
+#   n_samples: 5  # 각 궤적당 샘플링할 포인트 수
+#   steps: 100  # 생성할 궤적의 스텝 수
+#   sample_radius: 0.1  # 시작점 주변 샘플링 반경
+#   seed: 42  # 난수 생성 시드 (재현 가능성을 위해)

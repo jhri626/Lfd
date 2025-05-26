@@ -307,7 +307,7 @@ class MotionPrimitiveModel(nn.Module):
             losses.append(avg_loss)
             
             if (epoch + 1) % log_interval == 0 or epoch == 0:
-                print(f"에포크 {epoch+1}/{epochs}, 손실: {avg_loss:.6f}")
+                print(f"에포크 {epoch+1}/{epochs}, state_loss: {state_loss:.6f}, triplet_loss: {triplet_loss:.6f}, latent_loss: {latent_loss:.6f}")
         
         self.encoder.eval()
         self.decoder.eval()
