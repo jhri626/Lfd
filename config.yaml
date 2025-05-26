@@ -4,14 +4,14 @@ data:
   selected_primitives_ids: "0"  # 사용할 프리미티브 ID
   workspace_dimensions: 2  # 작업 공간 차원
   dynamical_system_order: 2  # 동역학계 차수
-  trajectories_resample_length: 2000  # 궤적 리샘플링 길이
+  trajectories_resample_length: 50  # 궤적 리샘플링 길이
   workspace_boundaries_type: "from data"  # 작업 공간 경계 유형
   spline_sample_type: "from data resample"  # 스플라인 샘플링 유형
   evaluation_samples_length: 10  # 평가 샘플 길이
   imitation_window_size: 2  # 모방 윈도우 크기
   
   batch_size: 250  # 배치 크기
-  use_cached_data: true  # 캐시된 데이터 사용 여부
+  use_cached_data: false  # 캐시된 데이터 사용 여부
   data_dir: "results/data"  # 데이터 저장 디렉토리
   shuffle: true  # 셔플 여부
   num_workers: 4  # 데이터 로더 워커 수
@@ -27,8 +27,8 @@ model:
 
 # 학습 설정
 training:
-  epochs: 10000  # 전체 학습 에포크 수
-  epochs_autoencoder: 10000  # 오토인코더 학습 에포크
+  epochs: 1  # 전체 학습 에포크 수
+  epochs_autoencoder: 1  # 오토인코더 학습 에포크
   learning_rates:
     encoder: 1.0e-4  # 인코더 학습률
     decoder: 1.0e-4  # 디코더 학습률
@@ -44,7 +44,7 @@ visualization:
   enable: true  # 시각화 활성화 여부
   max_samples: 6  # 최대 샘플 수
   n_samples_per_primitive: 3  # 프리미티브당 샘플 수
-  steps: 2000  # 생성 스텝 수
+  steps: 50  # 생성 스텝 수
   
   # 데이터셋 기반 시각화 설정
   dataset_visualization:
@@ -53,7 +53,7 @@ visualization:
     trajectory_ids: [0]  # 시각화할 궤적 ID 목록 (각 프리미티브 내에서)
     n_samples: 5  # 각 궤적당 샘플링할 포인트 수
     sampling_radius: 0.1  # 시작점 주변 샘플링 반경
-    steps: 2000  # 생성할 궤적의 스텝 수
+    steps: 50  # 생성할 궤적의 스텝 수
 
 # # 일괄 궤적 평가 설정
 # batch_evaluation:

@@ -88,87 +88,70 @@ class TrajectoryDataset(Dataset):
         # 토치 텐서 변환
         self.demos     = torch.tensor(demos_np).float()       # (n_traj, n_steps, dim_ws, window)
         self.prim_ids  = torch.tensor(prim_ids_np).long()
-        self.min_vel = vel_min_np.float()
-        self.max_vel = vel_max_np.float()
-        
-        if acc_min_np is not None and acc_max_np is not None:
-            self.min_acc = acc_min_np.float()
-            self.max_acc = acc_max_np.float()
-        else:
-            self.min_acc = None
-            self.max_acc = None
-            
         self.order = order
         self.delta_t = delta_t
         self.use_per_traj_normalization = use_per_traj_normalization
         
-        # 데이터 크기 정보
+        # Dimensions
         self.n_traj, self.n_steps, self.dim_ws, window = self.demos.shape
-        assert window > order, "윈도우 크기는 시스템 차수보다 커야 합니다."
-        
-        # 정규화 파라미터 형태 확인 및 수정
-        if use_per_traj_normalization:
-            assert self.min_vel.shape[0] == self.n_traj, "궤적별 정규화를 위해선 min_vel의 첫 차원이 궤적 수와 일치해야 합니다."
-            assert self.max_vel.shape[0] == self.n_traj, "궤적별 정규화를 위해선 max_vel의 첫 차원이 궤적 수와 일치해야 합니다."
-            if self.min_acc is not None and self.max_acc is not None:
-                assert self.min_acc.shape[0] == self.n_traj, "궤적별 정규화를 위해선 min_acc의 첫 차원이 궤적 수와 일치해야 합니다."
-                assert self.max_acc.shape[0] == self.n_traj, "궤적별 정규화를 위해선 max_acc의 첫 차원이 궤적 수와 일치해야 합니다."
+        assert window > order, "Window size must exceed system order"
+
+        # Precompute full-trajectory states (position (+velocity))
+        # Position: demos[..., 0]
+        positions = self.demos[..., 0]                             # (n_traj, n_steps, dim_ws)
+        if self.order == 2:
+            # Compute raw velocities
+            raw_vel = (self.demos[..., 1] - positions) / self.delta_t  # (n_traj, n_steps, dim_ws)
+            # Normalize velocities per trajectory or globally
+            if self.use_per_traj_normalization:
+                # expand min/max per traj to time steps
+                min_vel = vel_min_np.unsqueeze(1).expand(-1, self.n_steps, -1)
+                max_vel = vel_max_np.unsqueeze(1).expand(-1, self.n_steps, -1)
+            else:
+                min_vel = vel_min_np.repeat(self.n_traj, self.n_steps, 1)
+                max_vel = vel_max_np.repeat(self.n_traj, self.n_steps, 1)
+            vel_norm = normalize_state(raw_vel, x_min=min_vel, x_max=max_vel)
+            # Concatenate position and normalized velocity
+            self.full_trajectory = torch.cat((positions, vel_norm), dim=-1)  # (n_traj, n_steps, dim_ws*2)
+
+            # Precompute windowed inputs by concatenating demo window and velocity window
+            # original windowed positions: self.demos[..., :window]
+            pos_windows = self.demos[..., :window]                    # (n_traj, n_steps, dim_ws, window)
+            vel_windows = vel_norm.unsqueeze(-1).expand(-1, -1, -1, window)
+            self.window_data = torch.cat((pos_windows, vel_windows), dim=2)
+            # new window_data shape: (n_traj, n_steps, dim_ws*2, window)
+        else:
+            # First-order: only positions
+            self.full_trajectory = positions                           # (n_traj, n_steps, dim_ws)
+            self.window_data = self.demos                              # shape unchanged
+
+        # Effective dataset length: exclude last time-step per trajectory
+        self.effective_len = self.n_traj * (self.n_steps - 1)
         
         print(f"데이터셋 생성: {self.n_traj} 궤적, 각 {self.n_steps} 스텝, 차원 {self.dim_ws}, 차수 {self.order}")
         print(f"궤적별 정규화 사용: {use_per_traj_normalization}")    
+        
     def __getitem__(self, idx):
-        # 인덱스에서 궤적 및 시간 스텝 추출
-        traj = idx // (self.n_steps - 1)  # 마지막 스텝은 다음 상태가 없으므로 제외
-        t = idx % (self.n_steps - 1)
+        """
+        Fast lookup using precomputed tensors
+        """
+        # Determine trajectory index and time-step
+        traj_idx = idx // (self.n_steps - 1)
+        step_idx = idx % (self.n_steps - 1)
 
-        # 전체 윈도우 데이터 추출 (현재 상태용)
-        window_current = self.demos[traj, t]  # (dim_ws, window)        
-        
-        # 전체 궤적 데이터 추출 - 이 궤적에 해당하는 모든 윈도우
-        full_position = self.demos[traj,:,:,0]  # (n_steps, dim_ws)
-          # (n_steps, dim_ws)
-        
-        # 시스템 차수가 2차인 경우 속도 계산 및 추가
-        if self.order == 2:
-            full_velocity = (self.demos[traj,:,:,1] - full_position) /self.delta_t
-            full_trajectory = torch.cat((full_position, full_velocity), dim=1)  # (n_steps, dim_ws * 2)
-            if t < self.n_steps - 2:  # 다음 스텝이 존재하는 경우
-                next_state = self.demos[traj, t + 1]
-                velocity = (next_state - window_current) / self.delta_t
-            else:  # 마지막 스텝의 경우 속도를 0으로 설정
-                velocity = torch.zeros_like(window_current)
+        # Current window (pos + vel if 2nd order)
+        window_current = self.window_data[traj_idx, step_idx]
+        # Full trajectory for this sample
+        full_traj = self.full_trajectory[traj_idx]
+        # Primitive ID
+        prim_id = self.prim_ids[traj_idx]
 
-            # 속도 데이터를 정규화 (traj별 정규화 지원)
-            if self.use_per_traj_normalization:
-                # traj별 정규화 파라미터 사용
-                traj_min_vel = self.min_vel[traj]  # (dim_ws,)
-                traj_max_vel = self.max_vel[traj]  # (dim_ws,)
-                
-                # 윈도우 차원으로 확장
-                min_vel_expanded = traj_min_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
-                max_vel_expanded = traj_max_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
-            else:
-                # 전체 데이터셋 정규화 파라미터 사용
-                min_vel_expanded = self.min_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
-                max_vel_expanded = self.max_vel.unsqueeze(-1).expand(-1, velocity.size(1))  # (dim_ws, window)
-
-            velocity = normalize_velocity(velocity, min_vel_expanded, max_vel_expanded)
-            # 속도 데이터를 window_current에 추가
-            window_current = torch.cat((window_current, velocity), dim=0)
-
-        # 프리미티브 ID
-        prim_id = self.prim_ids[traj]
-        
-        # 궤적 및 시간 인덱스
-        traj_idx = torch.tensor(traj, dtype=torch.long)
-        t_idx = torch.tensor(t, dtype=torch.long)
-        
-        # 현재 윈도우, 프리미티브 ID, 전체 궤적, 궤적 인덱스, 시간 인덱스 반환
-        return window_current, prim_id, full_trajectory, traj_idx, t_idx
+        # Return: windowed input, prim ID, full trajectory, trajectory index, time index
+        return window_current, prim_id, full_traj, traj_idx, step_idx
     
     def __len__(self):
         # 마지막 스텝을 제외한 유효한 인덱스만 반환
-        return self.n_traj * (self.n_steps - 1)
+        return self.effective_len
 
 
 class DataPipeline:
