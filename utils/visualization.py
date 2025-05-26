@@ -154,6 +154,7 @@ def visualize_from_dataset(
         orig_states = orig_positions
     
       # 3. 시작점(첫 번째 상태) 근처에서 n개의 포인트 샘플링
+    print(orig_states)
     start_state = orig_states[0]  # 첫 번째 상태 (위치 + 속도)
     print("start_state:", start_state)
     
@@ -372,7 +373,7 @@ def visualize_from_dataset(
     latent_demo_tensor = torch.stack(latent_demo, dim=0)   # shape: (steps, dim_latent)
     
     latent_sample_tensor = torch.stack(latent_sample, dim=1)  # same shape
-    '''  
+    
     # 2. Define all unique pairs of latent dimensions
     # For 4 latent dims, combinations of 2: (0,1),(0,2),(0,3),(1,2),(1,3),(2,3)
     dim_pairs = [(i, j) for i in range(latent_demo_tensor.size(-1))
@@ -428,9 +429,9 @@ def visualize_from_dataset(
     if latent_save_path is not None:
         plt.savefig(latent_save_path)
         print(f"Figure saved: {latent_save_path}")
-    '''
     
-    return fig 
+    
+    return fig ,fig_latent
 
 
 def evaluate_and_visualize_trajectories(

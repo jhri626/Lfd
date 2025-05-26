@@ -109,11 +109,10 @@ class MotionPrimitiveModel(nn.Module):
 
     def configure_optimizers(self, lr_encoder=1e-4, lr_decoder=1e-4, weight_decay=1e-5):
         """Set up optimizers for encoder and decoder."""
-        self.encoder_optimizer = optim.Adam(self.encoder.parameters(),
+        self.encoder_optimizer = optim.AdamW(self.encoder.parameters(),
                                             lr=lr_encoder, weight_decay=weight_decay)
-        self.decoder_optimizer = optim.Adam(self.decoder.parameters(),
+        self.decoder_optimizer = optim.AdamW(self.decoder.parameters(),
                                             lr=lr_decoder, weight_decay=weight_decay)
-        # dynamics 모델 학습 제거
 
     def set_goals(self, goals: torch.Tensor):
         """
@@ -217,6 +216,7 @@ class MotionPrimitiveModel(nn.Module):
         self.decoder.train()
         
         losses = []
+
         
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -246,7 +246,6 @@ class MotionPrimitiveModel(nn.Module):
                 
                 # 윈도우 크기 확인
                 window_size = batch_windows.shape[2]
-                
                 # 초기화 
                 total_loss = 0.0
                 latent_gain = 1
@@ -298,6 +297,10 @@ class MotionPrimitiveModel(nn.Module):
                 self.encoder_optimizer.zero_grad()
                 self.decoder_optimizer.zero_grad()
                 batch_loss.backward()
+                
+                torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), max_norm=1.0)
+                
                 self.encoder_optimizer.step()
                 self.decoder_optimizer.step()
                 
