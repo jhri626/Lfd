@@ -205,6 +205,7 @@ def visualize_from_dataset(
     latent_demo = []
     latent_sample =[]
     # 모델을 통해 궤적 생성
+    print(steps)
     for t in range(steps):
         latent_state = model.encoder(states, sampled_prim_ids)
         latent_state_traj = model.encoder(torch.from_numpy(orig_states[t]).to(dtype=next(model.parameters()).dtype), sampled_prim_ids)
@@ -380,7 +381,7 @@ def visualize_from_dataset(
     # 3. Create a 2x3 grid of subplots
     fig_latent, axes = plt.subplots(2, 3, figsize=(18, 12))
     axes = axes.flatten()
-    print(latent_demo_tensor.shape)
+    
     # 4. Plot each pair in its subplot
     for idx, (d1, d2) in enumerate(dim_pairs):
         ax_sub = axes[idx]
@@ -389,8 +390,6 @@ def visualize_from_dataset(
             # extract step trajectories for sample i
             traj_demo   = latent_demo_tensor.squeeze(0).detach().cpu().numpy()    # (steps, dim_latent)
             traj_sample = latent_sample_tensor[i].detach().cpu().numpy()
-            print(traj_demo.shape)
-            print(traj_sample.shape)
 
             # plot demo trajectory as dashed line
             ax_sub.plot(
@@ -428,6 +427,7 @@ def visualize_from_dataset(
     fig_latent.tight_layout()
     if latent_save_path is not None:
         plt.savefig(latent_save_path)
+        print(f"Figure saved: {latent_save_path}")
 
     
     return fig , fig_latent
