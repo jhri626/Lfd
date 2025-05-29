@@ -116,59 +116,19 @@ class Encoder(nn.Module):
             primitive_enc = self.encode_primitives(primitive_type)
             x = torch.cat([x, primitive_enc], dim=1)
             
-        return self.network(x)    
+        return self.network(x)
+
     def load_pretrained(self, checkpoint_path: str, strict: bool = False):
         """
-        사전 훈련된 가중치 불러오기 (체크포인트와 현재 모델 구조 간 매핑 포함)
+        사전 훈련된 가중치 불러오기
         
         Args:
             checkpoint_path: 체크포인트 경로
             strict: 엄격한 로딩 여부
         """
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        print("Checkpoint keys:", checkpoint.keys())
-        print("Current model keys:", self.state_dict().keys())
-        
-        # 체크포인트와 현재 모델 구조 간 매핑
-        mapped_state_dict = {}
-        
-        # 레이어 매핑 정의
-        layer_mapping = {
-            'layer1.0': 'network.0',  # 첫 번째 Linear
-            'layer1.1': 'network.1',  # 첫 번째 LayerNorm
-            'layer2.0': 'network.3',  # 두 번째 Linear
-            'layer2.1': 'network.4',  # 두 번째 LayerNorm
-            'layer5': 'network.6'     # 출력 Linear
-        }
-        
-        # 버퍼 매핑
-        if 'goals_latent_space' in checkpoint:
-            mapped_state_dict['goals_latent'] = checkpoint['goals_latent_space']
-        
-        if 'primitives_encodings' in checkpoint and hasattr(self, 'primitive_encodings'):
-            mapped_state_dict['primitive_encodings'] = checkpoint['primitives_encodings']
-        
-        # 레이어 가중치 및 바이어스 매핑
-        for old_key, new_key in layer_mapping.items():
-            if f'{old_key}.weight' in checkpoint:
-                mapped_state_dict[f'{new_key}.weight'] = checkpoint[f'{old_key}.weight']
-            if f'{old_key}.bias' in checkpoint:
-                mapped_state_dict[f'{new_key}.bias'] = checkpoint[f'{old_key}.bias']
-        
-        # 매핑된 상태 사전 출력
-        print("Mapped state dict keys:", mapped_state_dict.keys())
-        
-        # 매핑된 상태 사전 로드
-        missing_keys, unexpected_keys = self.load_state_dict(mapped_state_dict, strict=False)
-        
-        if len(missing_keys) > 0:
-            print(f"Missing keys: {missing_keys}")
-        if len(unexpected_keys) > 0:
-            print(f"Unexpected keys: {unexpected_keys}")
-        
-        # 평가 모드로 설정
+        self.load_state_dict(checkpoint, strict=strict)
         self.eval()
-        
         print(f"Loaded encoder checkpoint from {checkpoint_path}")
         
     def update_goals_latent(self, goals: torch.Tensor):
