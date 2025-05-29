@@ -4,6 +4,3 @@
 [submodule "submodule/BCSDM"]
 	path = submodule/BCSDM
 	url = https://github.com/Hajunsu/Contracting_share.git
-[submodule "submodule/CONDOR"]
-	path = submodule/CONDOR
-	url = https://github.com/rperezdattari/Stable-Motion-Primitives-via-Imitation-and-Contrastive-Learning.git
