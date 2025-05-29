@@ -26,7 +26,7 @@ class ContrastiveImitation:
         self.load_model = params.load_model
         self.results_path = params.results_path
         self.interpolation_sigma = params.interpolation_sigma
-        self.delta_t = 0.01  # used for training, can be anything
+        self.delta_t = 1  # used for training, can be anything
 
         # Parameters data processor
         self.primitive_ids = np.array(data['demonstrations primitive id'])
@@ -147,7 +147,9 @@ class ContrastiveImitation:
             # Do transition
             y_t_task_prev = dynamical_system_task.y_t['task']
             y_t_task = dynamical_system_task.transition(space='task')['latent state']
+            ############################## add y_traj as input for BCSDM############################
             _, y_t_latent = dynamical_system_latent.transition_latent_system(y_traj=y_traj)
+            ########################################################################################
 
             if i > 0:  # we need at least one iteration to have a previous point to push the current one away from
                 # Transition matching cost
@@ -282,8 +284,10 @@ class ContrastiveImitation:
 
         # Sample from trajectory
         state_sample_IL, primitive_type_sample_IL = self.demo_sample()
-        
+
+        ############################# add demo traj encoding logic####################
         y_traj = self.model.encoder(self.demo_traj,self.primitive_ids)
+        ##############################################################################
         
         # Get loss from CONDOR
         loss, loss_list, losses_names = self.compute_loss(state_sample_IL,
@@ -298,7 +302,12 @@ class ContrastiveImitation:
 
         return loss, loss_list, losses_names
 
-    def traj_generator(self):
+    def traj_generator(self): 
+        '''
+        Function for generate demo trajectory containing velocity
+
+        Use mean of demos as representative demo trajectory
+        '''
         
         mean_traj = np.mean(self.demonstrations_train, axis=0)
         full_traj = mean_traj[...,0]

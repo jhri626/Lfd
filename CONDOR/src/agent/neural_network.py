@@ -174,15 +174,21 @@ class NeuralNetwork(torch.nn.Module):
 
         # Get gain latent dynamical system
         alpha = self.gains_latent_dynamical_system(y_t_norm)
+
+        ############## y_traj & y_dot_traj ################################################
         y_dot_traj = (y_traj[1:,:] -y_traj[:-1,:])/dt
         
         y_dot_traj = torch.cat([y_dot_traj, y_dot_traj.new_zeros(1, y_dot_traj.size(1))], dim=0)
         y_dot_traj = torch.stack([y_dot_traj for _ in range(y_t.shape[0])], dim=0)
         y_traj = torch.stack([y_traj for _ in range(y_t.shape[0])], dim=0)
-        
+        ####################################################################################
 
         # First order dynamical system in latent space
-        # dy_t = alpha * (y_goal.cuda() - y_t.cuda())
+        # dy_t = alpha * (y_goal.cuda() - y_t.cuda())   -> previous work logic
+        
+        '''
+        fixed latent dynamics logic
+        '''
         eta=2
         dy_t = gvf_R2(y_t, eta , y_traj , y_dot_traj)
 
