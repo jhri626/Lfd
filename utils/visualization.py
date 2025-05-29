@@ -205,12 +205,12 @@ def visualize_from_dataset(
     
     latent_demo = []
     latent_sample =[]
+    latent_traj =[]
     # 모델을 통해 궤적 생성
     print(steps)
     for t in range(steps):
         latent_state = model.encoder(states, sampled_prim_ids)
         latent_state_traj = model.encoder(torch.from_numpy(orig_states[t]).to(dtype=next(model.parameters()).dtype), sampled_prim_ids)
-        
         decoder_out= model.decoder(latent_state,sampled_prim_ids)
         
         latent_demo.append(latent_state_traj)
@@ -220,6 +220,12 @@ def visualize_from_dataset(
         states = task_state
         
         state_traj.append(states)
+
+    latent_state = model.encoder(sampled_states, sampled_prim_ids)
+    for t in range(steps):
+        if t>0:
+            latent_state = model.latent_dynamics(latent_state,torch.stack(latent_demo,dim=0).unsqueeze(0).repeat(5,1,1),sampled_prim_ids[0])
+        latent_traj.append(latent_state)
 
         
         
@@ -373,6 +379,8 @@ def visualize_from_dataset(
     latent_demo_tensor = torch.stack(latent_demo, dim=0)   # shape: (steps, dim_latent)
     
     latent_sample_tensor = torch.stack(latent_sample, dim=1)  # same shape
+    latent_traj_tensor = torch.stack(latent_traj,dim=1)
+    
     
     # 2. Define all unique pairs of latent dimensions
     # For 4 latent dims, combinations of 2: (0,1),(0,2),(0,3),(1,2),(1,3),(2,3)
@@ -386,26 +394,38 @@ def visualize_from_dataset(
     # 4. Plot each pair in its subplot
     for idx, (d1, d2) in enumerate(dim_pairs):
         ax_sub = axes[idx]
-        for i in range(n_samples):
+        traj_demo   = latent_demo_tensor.squeeze(0).detach().cpu().numpy()    # (steps, dim_latent)
+        ax_sub.plot(
+            traj_demo[:, d1], traj_demo[:, d2],
+            linestyle='--',
+            marker='o', markersize=10, markerfacecolor='none',  # 윤곽만 있는 마커
+            alpha=0.15, color=color, linewidth=0.5,             # 선도 얇고 흐리게
+            label=f'Demo {i+1}' if idx == 0 else None
+        )
+        for i in range(n_samples-1):
             color = colors[i % len(colors)]
             # extract step trajectories for sample i
-            traj_demo   = latent_demo_tensor.squeeze(0).detach().cpu().numpy()    # (steps, dim_latent)
+            
             traj_sample = latent_sample_tensor[i].detach().cpu().numpy()
+            traj_latent= latent_traj_tensor[i].detach().cpu().numpy()
+
 
             # plot demo trajectory as dashed line
+            
             ax_sub.plot(
-                traj_demo[:, d1], traj_demo[:, d2],
-                linestyle='--', marker='.', markersize=3,
-                alpha=0.8, color=color,
-                label=f'Demo {i+1}' if idx == 0 else None
+                traj_latent[:, d1], traj_latent[:, d2],
+                linestyle='-', marker='.', markersize=2,
+                alpha=0.6, color=color,
+                label=f'Latent {i+1}' if idx == 0 else None
             )
-            # plot sample trajectory as solid line
-            ax_sub.plot(
-                traj_sample[:, d1], traj_sample[:, d2],
-                linestyle='-', marker='.', markersize=3,
-                alpha=0.8, color=color,
-                label=f'Sample {i+1}' if idx == 0 else None
-            )
+            
+            # # plot sample trajectory as solid line
+            # ax_sub.plot(
+            #     traj_sample[:, d1], traj_sample[:, d2],
+            #     linestyle='-', marker='.', markersize=3,
+            #     alpha=0.8, color=color,
+            #     label=f'Sample {i+1}' if idx == 0 else None
+            # )
             # goal plotting
             ax_sub.plot(
             latent_goal[d1], 

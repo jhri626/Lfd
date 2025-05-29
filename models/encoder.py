@@ -166,8 +166,6 @@ class Encoder(nn.Module):
         if len(unexpected_keys) > 0:
             print(f"Unexpected keys: {unexpected_keys}")
         
-        # 평가 모드로 설정
-        self.eval()
         
         print(f"Loaded encoder checkpoint from {checkpoint_path}")
         

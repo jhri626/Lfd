@@ -64,7 +64,7 @@ class StateDynamics(nn.Module):
         self.register_buffer("acc_max", torch.zeros(1, workspace_dim,  device=self.device))
         
         # 시간 간격
-        self.delta_t = 1.0
+        self.delta_t = 0.1
         
         self.to(device)
 

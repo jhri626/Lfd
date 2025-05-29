@@ -54,7 +54,6 @@ class LatentDynamics(nn.Module):
         
         # 단순화: 고정된 파라미터 사용 (학습 없음)
         self.adaptive_gains = False  # 어댑티브 게인 제거
-        self.delta_t = 1.0  # 고정된 시간 간격
         self.latent_gain = latent_gain
         self.latent_gain_lower_limit = latent_gain_lower_limit
         self.latent_gain_upper_limit = latent_gain_upper_limit
@@ -73,9 +72,9 @@ class LatentDynamics(nn.Module):
         self.to(device)
         
         # 학습용 파라미터
-        self.delta_t = 1.0  # 시간 간격
+        self.delta_t = 0.1  # 시간 간격
           
-        self.scale_factor = 10.0  # contraction factor for gvf_R2
+        self.scale_factor = 5  # contraction factor for gvf_R2
 
     def encode_primitives(self, primitive_type: torch.Tensor) -> torch.Tensor:
         """
@@ -127,14 +126,16 @@ class LatentDynamics(nn.Module):
             idx = torch.argmax(primitive_type, dim=1)
         else:
             idx = primitive_type
+    
         
-        
-        zdot_traj = latent_traj[:,1:]-latent_traj[:,:-1]
+        zdot_traj = (latent_traj[:,1:]-latent_traj[:,:-1])/self.delta_t
         zdot_traj = torch.cat([zdot_traj, zdot_traj.new_zeros(zdot_traj.size(0), 1, zdot_traj.size(2))], dim=1)
         
         zdot = R2.gvf_R2(z, self.scale_factor, latent_traj, zdot_traj)
         
         # 2. 오일러 적분 수행
+        
+
         z_next = z + zdot * self.delta_t
         
         return z_next

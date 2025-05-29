@@ -142,7 +142,7 @@ def main():
         # 데이터셋 및 로더 생성
         pipeline = DataPipeline(data_params)
         print(f"궤적별 정규화 사용: {use_traj_norm}")
-        dataset = pipeline.create_dataset(preprocessed_data, use_per_traj_normalization=use_traj_norm)
+        dataset = pipeline.create_dataset(preprocessed_data,delta_t=0.1, use_per_traj_normalization=use_traj_norm)
         loader = pipeline.create_data_loader(dataset)
     else:
         print("데이터 파이프라인 실행 중...")

@@ -43,6 +43,7 @@ class DataPipelineParams:
     spline_sample_type: str = "evenly spaced"        # 스플라인 샘플링 유형
     evaluation_samples_length: int = 10              # 평가 샘플 길이
     imitation_window_size: int = 5                   # 모방 윈도우 크기 (시간적 문맥을 위한 윈도우 크기)
+    delta_t: float =0.1
     
     # 학습 파라미터
     batch_size: int = 128                            # 배치 크기

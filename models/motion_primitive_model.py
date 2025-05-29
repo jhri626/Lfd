@@ -90,7 +90,6 @@ class MotionPrimitiveModel(nn.Module):
             device=device
         )
         # 잠재 다이나믹스 모델 초기화 (학습 없이 오일러 적분만 수행)
-        self.latent_dynamics.delta_t = 1.0
 
         self.state_dynamics = StateDynamics(
             dim_state=dim_state,
@@ -101,7 +100,6 @@ class MotionPrimitiveModel(nn.Module):
             device=device
         )
         # 상태 다이나믹스 모델 초기화 (학습 없이 오일러 적분만 수행)
-        self.state_dynamics.delta_t = 1.0
         
         # 옵티마이저 초기화
         self.encoder_optimizer = None
@@ -128,7 +126,7 @@ class MotionPrimitiveModel(nn.Module):
         self.encoder.update_goals_latent(goals)
         self.latent_dynamics.set_goals_latent(self.encoder.goals_latent)
 
-    def load_pretrained_encoder(self, checkpoint_path: str, strict: bool = False):
+    def load_pretrained_encoder(self, checkpoint_path: str, strict: bool = False,freeze: bool = False):
         """
         사전 학습된 인코더 로드
 
@@ -137,6 +135,11 @@ class MotionPrimitiveModel(nn.Module):
             strict: 엄격한 로딩 여부
         """
         self.encoder.load_pretrained(checkpoint_path, strict=strict)
+        if freeze:
+        # 인코더 가중치 동결
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+            print("freeze the encoder")
 
     def load_pretrained_models(
         self, 
@@ -249,7 +252,9 @@ class MotionPrimitiveModel(nn.Module):
                 # 초기화 
                 total_loss = 0.0
                 latent_gain = 1
-                triplet_gain = 1
+                triplet_gain = 0.5
+                stable_loss= 0.0
+                bc_loss= 0.0
                 
                 # 순차 처리 대신 배치로 처리 (PyTorch 효율적 처리)
                 # 시작 위치는 항상 윈도우의 첫 번째 위치
@@ -269,13 +274,13 @@ class MotionPrimitiveModel(nn.Module):
                     # latent dynamics 손실 (첫 번째 스텝 제외)
                     if t > 0:
                         latent_in_latent = self.latent_dynamics(latent_in_latent, batch_latent_trajectories ,batch_prims)
-                        latent_loss = nn.functional.mse_loss(latent_state, latent_in_latent)
-                        total_loss += latent_gain * latent_loss
+                        # latent_loss = nn.functional.mse_loss(latent_state, latent_in_latent)
+                        # total_loss += latent_gain * latent_loss
                         
                         triplet_loss = nn.functional.triplet_margin_loss(
-                            goal_latent, latent_state, prev_latent_state, margin=1e-2) 
+                            goal_latent, latent_state, prev_latent_state, margin=1e-4) 
                         
-                        total_loss += triplet_gain * triplet_loss
+                        stable_loss += triplet_gain * triplet_loss
                     
                     # 디코딩 및 상태 동역학
                     decoder_out = self.decoder(latent_state, batch_prims)  # (B, dim_state)
@@ -284,13 +289,14 @@ class MotionPrimitiveModel(nn.Module):
                     # 상태 예측 손실
                     target_positions = batch_windows[:, :, t+1]  # (B, dim_ws)
                     state_loss = nn.functional.mse_loss(next_states, target_positions)
-                    total_loss += state_loss
+                    bc_loss += state_loss
                     
                     # 다음 스텝을 위한 업데이트
                     prev_latent_state = latent_state
                     states = next_states
                 
                 # 모든 시간 스텝에 대한 평균 손실
+                total_loss = bc_loss + stable_loss
                 batch_loss = total_loss / (window_size - 1)
                 
                 # 최적화
@@ -311,7 +317,7 @@ class MotionPrimitiveModel(nn.Module):
             losses.append(avg_loss)
             
             if (epoch + 1) % log_interval == 0 or epoch == 0:
-                print(f"에포크 {epoch+1}/{epochs}, state_loss: {state_loss:.6f}, triplet_loss: {triplet_loss:.6f}, latent_loss: {latent_loss:.6f}")
+                print(f"에포크 {epoch+1}/{epochs}, state_loss: {bc_loss:.6f}, triplet_loss: {stable_loss:.6f}")
         
         self.encoder.eval()
         self.decoder.eval()
