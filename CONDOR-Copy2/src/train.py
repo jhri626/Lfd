@@ -2,12 +2,22 @@ import importlib
 from simple_parsing import ArgumentParser
 from initializer import initialize_framework
 from torch.utils.tensorboard import SummaryWriter
+import random
+import numpy as np
+import torch
 
 # Get arguments
 parser = ArgumentParser()
 parser.add_argument('--params', type=str, default='1st_order_2D', help='')
 parser.add_argument('--results-base-directory', type=str, default='./', help='')
 args = parser.parse_args()
+
+
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+torch.cuda.manual_seed_all(42)
 
 # Import parameters
 Params = getattr(importlib.import_module('params.' + args.params), 'Params')

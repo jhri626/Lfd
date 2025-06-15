@@ -40,6 +40,7 @@ class Evaluate():
         self.demonstrations_eval = data['demonstrations raw']
         self.x_min = np.array(data['x min'])
         self.x_max = np.array(data['x max'])
+        print("eval", self.delta_t_eval)
 
         # Variables
         self.best_metric, self.best_n_spurious = 1e7, 1e7
@@ -115,7 +116,7 @@ class Evaluate():
         initial_states = torch.cat([initial_states_demos, initial_states_grid], dim=0)
 
         # Simulate trajectories
-        print(self.delta_t_eval)
+        print("simul",self.delta_t_eval)
         dynamical_system = self.learner.init_dynamical_system(initial_states, primitive_type, self.delta_t_eval)
         visited_states, _ = dynamical_system.simulate(self.simulated_trajectory_length, space=space, **kwargs)
 

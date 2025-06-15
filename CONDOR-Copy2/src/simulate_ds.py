@@ -28,7 +28,7 @@ learner, _, data = initialize_framework(params, params_name, verbose=False)
 
 # Initialize dynamical system
 
-dynamical_system = learner.init_dynamical_system(initial_states=torch.FloatTensor(x_t_init).cuda())
+dynamical_system = learner.init_dynamical_system(initial_states=torch.FloatTensor(x_t_init).cuda(),delta_t=params.delta_t)
 
 fontdict = {
     'fontsize': 16,

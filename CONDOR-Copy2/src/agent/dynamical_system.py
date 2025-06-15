@@ -29,7 +29,8 @@ class DynamicalSystem():
         self.x_min = np.array(x_min)
         self.x_max = np.array(x_max)
         self.batch_size = x_init.shape[0]
-
+        
+        # print("dynamics time" , self.delta_t)
         # Init dynamical system state
         self.x_t_d = x_init
         self.y_t = {'task': None, 'latent': None}
@@ -67,7 +68,6 @@ class DynamicalSystem():
 
         # Integrate
         self.y_t_d = euler_integration(y_t, dy_t_d, self.delta_t)
-
         return self.y_t_d, y_t
 
     def map_to_velocity(self, y_t):
@@ -123,9 +123,13 @@ class DynamicalSystem():
             acc_t_d = torch.clamp(acc_t_d, min_acc_t_d, max_acc_t_d)
 
         # Integrate
+        # acc_t_d = torch.clamp(acc_t_d, self.min_acc, self.max_acc)
+        
         vel_t_d = euler_integration(vel_t, acc_t_d, self.delta_t)
+        # vel_t_d = torch.clamp(acc_t_d, self.min_vel, self.max_vel)
+        
         pos_t_d = euler_integration(pos_t, vel_t_d, self.delta_t)
-
+        
         # Normalize velocity to have a state space between -1 and 1
         vel_t_d_norm = normalize_state(vel_t_d, self.min_vel, self.max_vel)
 

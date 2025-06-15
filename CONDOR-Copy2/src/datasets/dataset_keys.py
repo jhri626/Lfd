@@ -54,3 +54,17 @@ optitrack = ['hammer']
 # Joint space dataset
 joint_space = ['cleaning_1',
                'cleaning_2']
+
+
+LAIR_single = ['e',
+        'double_loop',
+        'Lag',
+        'double_lag',
+        'phi',
+        'mountain',
+        'two_roads',
+        'G_angle',
+        'capricorn',
+        'triple_loop',
+        'two']
+

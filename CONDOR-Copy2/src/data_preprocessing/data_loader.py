@@ -1,4 +1,4 @@
-from datasets.dataset_keys import LASA, LAIR, optitrack, interpolation, joint_space
+from datasets.dataset_keys import LASA, LAIR, optitrack, interpolation, joint_space, LAIR_single
 import os
 import pickle
 import numpy as np
@@ -48,6 +48,8 @@ def get_dataset_primitives_names(dataset_name):
         dataset_primitives_names = interpolation
     elif dataset_name == 'joint_space':
         dataset_primitives_names = joint_space
+    elif dataset_name == 'LAIR_single':
+        dataset_primitives_names = LAIR_single
     else:
         raise NameError('Dataset %s does not exist' % dataset_name)
 
@@ -74,7 +76,7 @@ def get_data_loader(dataset_name):
     """
     if dataset_name == 'LASA':
         data_loader = load_LASA
-    elif dataset_name == 'LAIR' or dataset_name == 'optitrack' or dataset_name == 'interpolation':
+    elif dataset_name == 'LAIR' or dataset_name == 'optitrack' or dataset_name == 'interpolation' or dataset_name == 'LAIR_single' :
         data_loader = load_numpy_file
     elif dataset_name == 'joint_space':
         data_loader = load_from_dict
@@ -120,7 +122,7 @@ def load_numpy_file(dataset_dir, demonstrations_names):
             demos.append(data.T)
             primitive_id.append(i)
 
-    dt = 0.1
+    dt = 1
     return demos, primitive_id, dt
 
 
