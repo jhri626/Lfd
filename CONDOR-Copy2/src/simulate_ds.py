@@ -28,7 +28,7 @@ learner, _, data = initialize_framework(params, params_name, verbose=False)
 
 # Initialize dynamical system
 
-dynamical_system = learner.init_dynamical_system(initial_states=torch.FloatTensor(x_t_init).cuda(),delta_t=params.delta_t)
+
 
 fontdict = {
     'fontsize': 16,
@@ -40,8 +40,9 @@ primitive_ids = np.array(data['demonstrations primitive id'])
 x_min = np.array(data['x min'])
 x_max = np.array(data['x max'])
 
+x_t_init
 
-
+dynamical_system = learner.init_dynamical_system(initial_states=torch.FloatTensor(x_t_init).cuda(),delta_t=params.delta_t)
 
 # Initialize trajectory plotter
 fig, ax = plt.subplots()

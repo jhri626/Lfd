@@ -27,6 +27,7 @@ class NeuralNetwork(torch.nn.Module):
         # Select activation function
         self.activation = torch.nn.GELU()
         self.sigmoid = torch.nn.Sigmoid()
+        self.tanh = torch.nn.Tanh()
 
         # Initialize goals list
         self.goals_latent_space = list(np.zeros(n_primitives))
@@ -86,6 +87,7 @@ class NeuralNetwork(torch.nn.Module):
             input = torch.zeros([1, self.n_input])  # add zeros as velocity goal for second order DS
             input[:, :goals[i].shape[0]] = goals[i]
             self.goals_latent_space[i] = self.encoder(input, primitive_type)
+            # print(self.goals_latent_space[i].cpu().detach().numpy())
 
     def get_goals_latent_space_batch(self, primitive_type):
         """
@@ -128,7 +130,8 @@ class NeuralNetwork(torch.nn.Module):
         e_2 = self.activation(self.norm_e_2(self.encoder2(e_1)))
 
         # Encoder layer 3
-        e_3 = self.activation(self.encoder3(e_2)) # fix it later
+        # e_3 = self.activation(self.encoder3(e_2)) # fix it later
+        e_3 = self.tanh(self.encoder3(e_2)) # GeLU to tanh
 
         # Encoder layer 4
         # e_4 = self.activation(self.encoder4(e_3)) # add more layer
@@ -148,7 +151,7 @@ class NeuralNetwork(torch.nn.Module):
         de_2 = self.activation(self.norm_de_dx2(self.decoder2_dx(de_1)))
 
         # Decoder dx layer 3
-        de_3 = self.activation(self.decoder3_dx(de_2))
+        de_3 = self.decoder3_dx(de_2)
 
         # Decoder dx layer 4
         # de_4 = self.decoder4_dx(de_3)
@@ -186,7 +189,7 @@ class NeuralNetwork(torch.nn.Module):
         y_t_norm = self.norm_latent_gain_input(y_t)
         # print("NN time" , dt)
         # Get gain latent dynamical system
-        alpha = self.gains_latent_dynamical_system(y_t_norm)
+        # alpha = self.gains_latent_dynamical_system(y_t_norm)
         y_dot_traj = (y_traj[1:,:] -y_traj[:-1,:])/dt
         
         y_dot_traj = torch.cat([y_dot_traj, y_dot_traj.new_zeros(1, y_dot_traj.size(1))], dim=0)
@@ -195,7 +198,9 @@ class NeuralNetwork(torch.nn.Module):
         
         # First order dynamical system in latent space
         # dy_t = alpha * (y_goal.cuda() - y_t.cuda())
-        eta=0.4
+        eta=0.04
+        # print(eta)
         dy_t = gvf_R2(y_t, eta , y_traj , y_dot_traj)
+        
 
         return dy_t

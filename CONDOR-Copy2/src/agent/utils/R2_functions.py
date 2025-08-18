@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
+from .distance import sasaki_R2 ,riemann_anisotropic_distance
+from .dynamical_system_operations import denormalize_state
 
 def Uniform_sampling_R2(xtraj, batch_size, xlim=None, ylim=None):
     
@@ -48,14 +50,18 @@ def gvf_R2(xsample, eta, xtraj, xdottraj):
         
     Returns:
         (B, D) vector at each sample point
-    """
+    # """
     B = xsample.shape[0]  # batch size
     T = xtraj.shape[1]    # sequence length
     D = xtraj.shape[2]    # feature dimension
     
+    # print(f"gvf_R2: xsample shape: {xsample.shape}, xtraj shape: {xtraj.shape}, xdottraj shape: {xdottraj.shape}")
+    
     # Expand (B, 1, D) to (B, T, D)
     xsample_expanded = xsample.unsqueeze(1)
     # Compute pairwise distance (B, T)
+    
+    
     distance = torch.norm(xsample_expanded - xtraj, dim=2)
     
     # Find index of the closest point (B,)
@@ -67,7 +73,9 @@ def gvf_R2(xsample, eta, xtraj, xdottraj):
     # Retrieve closest point and velocity (B, D)
     closest_point = xtraj[batch_idx, index_closest]
     V1 = xdottraj[batch_idx, index_closest]
-    
+
+    # print(V1[0,:],torch.norm(V1[0,:]))
+
     # Compute velocity direction
     vel = closest_point - xsample
     if eta == torch.inf:
@@ -75,7 +83,134 @@ def gvf_R2(xsample, eta, xtraj, xdottraj):
     else:
         return V1 + eta * vel
 
+def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius):
+    """
+    Compute vector field for given sample points
     
+    Args:
+        xsample: (B, D) sample points
+        eta: scaling parameter
+        xtraj: (B, T, D) trajectory data
+        xdottraj: (B, T, D) velocity data
+        
+    Returns:
+        (B, D) vector at each sample point
+    """
+    # Convert torch tensors to numpy if needed
+    if torch.is_tensor(xsample):
+        xsample = xsample.detach().cpu().numpy().copy()
+    else:
+        xsample = np.array(xsample, copy=True)
+        
+    if torch.is_tensor(xtraj):
+        xtraj = xtraj.detach().cpu().numpy().copy()
+    else:
+        xtraj = np.array(xtraj, copy=True)
+        
+    if torch.is_tensor(xdottraj):
+        xdottraj = xdottraj.detach().cpu().numpy().copy()
+    else:
+        xdottraj = np.array(xdottraj, copy=True)
+    
+    B = xsample.shape[0]  # batch size
+    T = xtraj.shape[1]    # sequence length
+    D = xtraj.shape[2]    # feature dimension
+    
+    
+    # Expand (B, 1, D) to (B, T, D) using numpy
+    xsample_expanded = np.expand_dims(xsample, axis=1)  # equivalent to unsqueeze(1)
+    # print(xsample_expanded)
+    
+    
+    # Compute pairwise distance (B, T)
+    
+    
+    # print(dist_radius.shape)
+    distance_pos = np.linalg.norm(xsample_expanded[:, :, :2] - xtraj[:, :, :2], axis=2)  # (B, T)
+    # print(distance_pos.shape)
+    top_n_argmin = [np.where(distance_pos[b] < dist_radius[b])[0] for b in range(B)]
+    # for i in range(B):
+        # print("a",top_n_argmin[i][:10])    
+
+    index_closest = np.empty(B, dtype=int)  # final indices per batch
+
+    if metric == 'sasaki':
+        for batch in range(B):
+            # 2) Candidate indices for this batch
+            idx = top_n_argmin[batch]
+            # print(distance_pos[:,80:100])
+            # print(distance_pos[:,350:355])
+                
+            if idx.size == 0:
+                # fallback to nearest by position if no candidate under the radius
+                iter = 0
+                new_idx = np.array([])
+                # print("="*100)
+                # print(np.argmin(distance_pos[batch]))
+                # print(dist_radius)
+                # print(distance_pos[:,90:100])
+                # print(distance_pos[:,350:355])
+                
+                while new_idx.size == 0: 
+                    new_idx_tuple = np.where(distance_pos[batch] < np.power(1.01, iter) * dist_radius[batch])
+                    new_idx = new_idx_tuple[0]
+                    # print("b", new_idx)
+                    iter += 1
+                idx = new_idx
+
+            # 3) Build candidate full_state: (1, K, 4) = [x, y, vx, vy]
+            
+            cand_pos = xtraj[0, idx, :2]      # (K, 2)
+            cand_vel = xdottraj[0, idx, :2]   # (K, 2)
+            full_state = np.concatenate([cand_pos, cand_vel], axis=1)[None, :, :]  # (1, K, 4)
+
+
+            sample_state = np.expand_dims(xsample_expanded[batch,:,:], axis=0)
+            # print(sample_state.shape, full_state.shape)
+            # 5) Sasaki-style distance on candidates only → pick best
+            # print("sample_state", sample_state.shape, "full_state", full_state.shape)
+            # dist_bt, pos_dist, vel_dist = sasaki_R2(sample_state, full_state)  # shape (1, K) per your original sasaki_R2
+            dist_bt, pos_dist, vel_dist = riemann_anisotropic_distance(sample_state, full_state)  # shape (1, K) per your original sasaki_R2
+            # print("dist_bt", dist_bt.shape)
+            # print(idx,dist_bt,pos_dist, vel_dist)
+            k_best = int(np.argmin(dist_bt, axis=1)[0])    # scalar index within idx
+            index_closest[batch] = idx[k_best]
+            # print(index_closest[batch])
+
+
+    else:
+        distance = np.linalg.norm(xsample_expanded[:,:,:2] - xtraj, axis=2)
+        index_closest = np.argmin(distance, axis=1)
+    
+    
+    # Find index of the closest point (B,)
+    # print(distance.shape)
+    # print(index_closest)
+    # print(f"gvf_R2_np: xsample shape: {xsample.shape}, xtraj shape: {xtraj.shape}, xdottraj shape: {xdottraj.shape}")
+    # print(np.sum(xsample[0,:2] - xtraj[0, index_closest[0],:]), np.sum(xsample[0,2:] - xdottraj[0, index_closest[0],:]))
+    
+    
+    # Retrieve closest point and velocity (B, D)
+    closest_point = xtraj[0, index_closest]
+    V1 = xdottraj[0, index_closest]
+    
+    # print(xsample)
+    
+
+    # Compute velocity direction
+    vel = closest_point - xsample[:,:2]
+    dist = 1 * np.linalg.norm(vel, axis=1)
+
+    # print("closest point", closest_point,"index closest", index_closest, "V1", V1, "vel",vel)
+    
+    
+    # print(dist[0])
+    if eta == np.inf:
+        return vel
+    else:
+        # print(V1[0],vel[0])
+        # print((V1 + eta * vel)[0])
+        return V1 + eta * vel , dist  # Return both the vector field and the distance norm
 
 def streamline_plot_R2(xtraj, xdottraj=None, eta=5, grid_step = 101, a_max=50, ax=None, figsize=(10,10), self=None):
     # set

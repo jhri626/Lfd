@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from agent.neural_network import NeuralNetwork
-from agent.utils.ranking_losses import ContrastiveLoss, TripletLoss
+from agent.utils.ranking_losses import ContrastiveLoss, TripletLoss, TrajectoryLoss
 from agent.dynamical_system import DynamicalSystem
 from agent.utils.dynamical_system_operations import normalize_state
 
@@ -29,6 +29,10 @@ class ContrastiveImitation:
         self.results_path = params.results_path
         self.interpolation_sigma = params.interpolation_sigma
         self.delta_t = params.delta_t  # used for training, can be anything
+        self.latent_space_dim = params.latent_space_dim
+        self.encoder_only_epochs = params.encoder_only_epochs
+        self.current_epoch = 0
+        self.encoder_frozen = False
         print("contrastive time" , self.delta_t)
 
         # Parameters data processor
@@ -59,8 +63,10 @@ class ContrastiveImitation:
         # Initialize Neural Network losses
         self.mse_loss = torch.nn.MSELoss()
         self.triplet_loss_latent = TripletLoss(margin=1e-4, swap=True)
+        self.triplet_loss_demo = TripletLoss(margin=1e-3, swap=False)
         self.triplet_loss_goal = TripletLoss(margin=params.triplet_margin, swap=False)
         self.contrastive_loss = ContrastiveLoss(margin=params.contrastive_margin)
+        self.curvature_loss = TrajectoryLoss(eps=1e-6)
 
         # Initialize Neural Network
         self.model = NeuralNetwork(dim_state=self.dim_state,
@@ -73,7 +79,24 @@ class ContrastiveImitation:
                                    latent_space_dim=params.latent_space_dim,
                                    neurons_hidden_layers=params.neurons_hidden_layers,
                                    adaptive_gains=params.adaptive_gains).cuda()
-
+        
+        self.encoder_params = []
+        self.decoder_params = []
+        
+        # model의 파라미터를 encoder와 decoder로 분리
+        for name, param in self.model.named_parameters():
+            if 'encoder' in name.lower():  # encoder 관련 파라미터
+                self.encoder_params.append(param)
+            else:  # decoder 관련 파라미터
+                self.decoder_params.append(param)
+                
+        self.encoder_optimizer = torch.optim.AdamW(self.encoder_params,
+                                                   lr=params.learning_rate,
+                                                   weight_decay=params.weight_decay)
+        
+        self.decoder_optimizer = torch.optim.AdamW(self.decoder_params,
+                                                   lr=params.learning_rate,
+                                                   weight_decay=params.weight_decay)
         # Initialize optimizer
         self.optimizer = torch.optim.AdamW(self.model.parameters(),
                                            lr=params.learning_rate,
@@ -85,7 +108,42 @@ class ContrastiveImitation:
 
         # Initialize latent goals
         self.model.update_goals_latent_space(self.goals_tensor)
+    
+    
+    def freeze_encoder(self):
+        """Encoder 파라미터를 freeze"""
+        for param in self.encoder_params:
+            param.requires_grad = False
+        self.encoder_frozen = True
+        print("Encoder frozen - only decoder will be trained")
 
+    def unfreeze_encoder(self):
+        """Encoder 파라미터를 unfreeze"""
+        for param in self.encoder_params:
+            param.requires_grad = True
+        self.encoder_frozen = False
+        print("Encoder unfrozen - both encoder and decoder will be trained")
+    
+    def update_epoch(self, epoch):
+        """에폭 업데이트 및 학습 모드 전환"""
+        self.current_epoch = epoch
+        
+        if epoch < self.encoder_only_epochs and self.encoder_frozen:
+            # Encoder만 학습하는 단계
+            self.unfreeze_encoder()
+            # Decoder freeze
+            for param in self.decoder_params:
+                param.requires_grad = True
+            print(f"Epoch {epoch}: Training both")
+            
+        elif epoch >= self.encoder_only_epochs and not self.encoder_frozen:
+            # Encoder freeze하고 decoder만 학습하는 단계
+            self.freeze_encoder()
+            # Decoder unfreeze
+            for param in self.decoder_params:
+                param.requires_grad = True
+            print(f"Epoch {epoch}: Training decoder only (encoder frozen)")
+            
     def init_dynamical_system(self, initial_states, primitive_type=None, delta_t=1):
         """
         Creates dynamical system using the parameters/variables of the learning policy
@@ -125,12 +183,51 @@ class ContrastiveImitation:
         for i in range(self.imitation_window_size - 1):
             # Compute transition
             x_t_d = dynamical_system.transition(space='task')['desired state']
-
+            # print("x_t_d", x_t_d.shape)
             # Compute and accumulate error
             imitation_error_accumulated += self.mse_loss(x_t_d[:, :self.dim_workspace], state_sample[:, :self.dim_workspace, i + 1].cuda())
+            # imitation_error_accumulated += self.mse_loss(x_t_d[:, :], state_sample[:, :, i + 1].cuda())
         imitation_error_accumulated = imitation_error_accumulated / (self.imitation_window_size - 1)
 
         return imitation_error_accumulated * self.imitation_loss_weight
+
+    def demo_cost(self, y_traj, primitive_type_sample):
+        """
+        demo cost - GPU optimized version
+        """        
+        
+        y_goal = self.model.get_goals_latent_space_batch(primitive_type_sample)
+        # print("y_traj", y_traj.shape)
+        
+        if y_traj.shape[0] <= 1:
+            return torch.tensor(0.0, device=y_traj.device)
+        
+        batch_size = y_traj.shape[0] - 1
+        
+        # y_goal을 trajectory의 각 시간 스텝에 맞게 복제
+        # y_goal: [n_primitives, latent_dim] -> [batch_size, latent_dim]
+        if y_goal.dim() == 2:
+            # 첫 번째 primitive type만 사용 (단순화)
+            y_goal_expanded = y_goal[0].unsqueeze(0).expand(batch_size, -1).contiguous()
+        else:
+            y_goal_expanded = y_goal.expand(batch_size, -1).contiguous()
+        
+        # 연속된 trajectory 포인트들
+        y_current = y_traj[1:]   # [batch_size, latent_dim]
+        y_previous = y_traj[:-1] # [batch_size, latent_dim]
+
+
+        # print("y_current", y_current.shape)
+        # print("y_previous", y_previous.shape)
+
+        # triplet loss 계산 (모든 차원이 [batch_size, latent_dim]로 동일)
+        trip_loss = self.triplet_loss_demo(
+            y_goal_expanded,  # anchor: [batch_size, latent_dim]
+            y_current,        # positive: [batch_size, latent_dim]
+            y_previous,        # negative: [batch_size, latent_dim]
+        )
+        
+        return  1 * trip_loss 
 
     def contrastive_matching(self, y_traj, state_sample, primitive_type_sample):
         """
@@ -146,12 +243,18 @@ class ContrastiveImitation:
         # Compute cost over trajectory
         contrastive_matching_cost = 0
         batch_size = state_sample.shape[0]
-
-        for i in range(self.generalization_window_size):
+        # print("start")
+        for i in range (self.generalization_window_size):
             # Do transition
             y_t_task_prev = dynamical_system_task.y_t['task']
             y_t_task = dynamical_system_task.transition(space='task')['latent state']
             _, y_t_latent = dynamical_system_latent.transition_latent_system(y_traj=y_traj)
+            
+            # if i <5:
+            #     print(i)
+            #     print(y_t_task_prev[0])
+            #     print(y_t_task[0])
+            #     print(y_t_latent[0])
 
             if i > 0:  # we need at least one iteration to have a previous point to push the current one away from
                 # Transition matching cost
@@ -171,19 +274,22 @@ class ContrastiveImitation:
                     contrastive_matching_cost += self.contrastive_loss(anchor_samples, contrastive_samples, contrastive_label)
 
                 elif self.stabilization_loss == 'triplet':
-                    contrastive_matching_cost += self.triplet_loss(y_t_task, y_t_latent, y_t_task_prev)
+                    contrastive_matching_cost += self.triplet_loss_latent(y_t_task, y_t_latent, y_t_task_prev)
                 elif self.stabilization_loss == 'triplet_goal':
-                    # latent_trip = 0.3 * self.mse_loss(y_t_task, y_t_latent)
-                    latent_trip=0
+                    latent_trip =  self.mse_loss(y_t_task, y_t_latent)
+                    # latent_trip=0
                     y_goal = self.model.get_goals_latent_space_batch(primitive_type_sample)
-                    trip_loss = self.triplet_loss_goal(y_goal, y_t_task, y_t_task_prev)
-                    # trip_loss=0
-    
-                    contrastive_matching_cost += latent_trip + 0.1 * trip_loss
+                    
+                    trip_loss= self.triplet_loss_goal(y_goal, y_t_task, y_t_task_prev)
+                    contrastive_matching_cost += 0.5 * latent_trip + 0.1 * trip_loss
+                    # contrastive_matching_cost += 0.5 * latent_trip 
+                    # contrastive_matching_cost +=  0.1 * trip_loss
                     # print(trip_loss)
+                else:
+                    raise ValueError('Unknown stabilization loss type: ' + self.stabilization_loss)
                     
         contrastive_matching_cost = contrastive_matching_cost / (self.generalization_window_size - 1)
-
+        # print("end")
         return contrastive_matching_cost * self.stabilization_loss_weight
 
     
@@ -251,6 +357,14 @@ class ContrastiveImitation:
         loss = loss / (2 * self.dim_workspace)
     
         return loss * self.boundary_loss_weight  # 파라미터 추가 필요
+    
+    def linarization_loss(self,y_traj):
+        
+        
+        loss = self.mse_loss(self.y_traj_latent, y_traj)
+        # loss = self.curvature_loss(y_traj)
+
+        return 1e-2 * loss
    
     def demo_sample(self):
         """
@@ -290,16 +404,6 @@ class ContrastiveImitation:
         primitive_type_sample = torch.FloatTensor(primitive_type_sample).cuda()
 
         return state_sample, primitive_type_sample
-
-    def curvature_regulation_loss(self,y_traj):
-        traj_len = y_traj.shape[0]
-        y_traj_0 = y_traj[:-2,:]
-        y_traj_1 = y_traj[1:-1,:]
-        y_traj_2 = y_traj[2:,:]
-
-        ddy = (y_traj_2 - 2* y_traj_1 + y_traj_0).pow(2).sum()
-
-        return 1e-1 * ddy
             
     def space_sample(self):
         """
@@ -334,6 +438,7 @@ class ContrastiveImitation:
         losses_names = []
 
         # Learning from demonstrations outer loop
+        
         if self.imitation_loss_weight != 0:
             imitation_cost = self.imitation_cost(state_sample_IL, primitive_type_sample_IL)
             loss_list.append(imitation_cost)
@@ -344,19 +449,23 @@ class ContrastiveImitation:
             contrastive_matching_cost = self.contrastive_matching(y_traj,state_sample_gen, primitive_type_sample_gen)
             loss_list.append(contrastive_matching_cost)
             losses_names.append('Stability')
-       
+    
         if self.boundary_loss_weight != 0:
             state_sample_gen_bound = torch.clone(state_sample_gen)
             boundary_cost = self.boundary_constrain_loss(state_sample_gen_bound, primitive_type_sample_gen)
             loss_list.append(boundary_cost)
             losses_names.append('Boundary')
+        
+        # demo_cost = self.linarization_loss(y_traj)
+        # loss_list.append(demo_cost)
+        # losses_names.append('Demo')
 
         # Sum losses
         loss = 0
         for i in range(len(loss_list)):
             loss += loss_list[i]
 
-        # loss += self.curvature_regulation_loss(y_traj)
+
 
         return loss, loss_list, losses_names
 
@@ -367,11 +476,11 @@ class ContrastiveImitation:
         self.optimizer.zero_grad()
         loss.backward()
         
-        max_grad_norm = 0.01  # Set as needed
+        max_grad_norm = 1e-3
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
         
         self.optimizer.step()
-
+        
         # Update goal in latent space
         self.model.update_goals_latent_space(self.goals_tensor)
 
@@ -394,21 +503,75 @@ class ContrastiveImitation:
                                                           primitive_type_sample_gen,
                                                           y_traj
                                                           )
-
+        # print(y_traj[-1,:].cpu().detach().numpy())
+        
         # Update model
         self.update_model(loss)
 
         return loss, loss_list, losses_names
 
+    def compute_targets_from_traj_4d(
+        self,
+        traj: torch.Tensor,
+        dim: int = 4,
+        start_val: float = -0.75,
+        end_val:   float = 0.75
+    ) -> torch.Tensor:
+        """
+        Map a 4D trajectory to a 4D line segment using normalized cumulative distance.
+        Parameters
+        ----------
+        self : any
+            Unused class instance reference.
+        traj : torch.Tensor, shape (N, 4)
+            Original trajectory states, e.g. [x, y, dx, dy].
+        start_val : float
+            Value at the start of the target line (applied to all 4 dims).
+        end_val : float
+            Value at the end of the target line (applied to all 4 dims).
+        Returns
+        -------
+        targets : torch.Tensor, shape (N, 4)
+            Mapped points on the line from [start_val,...] to [end_val,...].
+        """
+        # 1. Compute 4D differences between consecutive points
+        delta = traj[1:] - traj[:-1]               # shape (N-1, 4)
+
+        # 2. Compute Euclidean distances in 4D
+        d = torch.norm(delta, dim=1)               # shape (N-1,)
+
+        # 3. Build cumulative distances and normalize to [0,1]
+        s = torch.cat((torch.zeros(1, device=traj.device), torch.cumsum(d, dim=0)))  # shape (N,)
+        u = s / s[-1]                              # shape (N,)
+
+        # 4. Define 4D start and end vectors
+        start = torch.full((1, dim), start_val, device=traj.device)
+        end   = torch.full((1, dim), end_val,   device=traj.device)
+
+        # 5. Interpolate along the 4D line for each normalized u
+        targets = start + u.unsqueeze(1) * (end - start)  # shape (N, 4)
+
+        return targets
+
+
+
     def traj_generator(self):
         
         mean_traj = np.mean(self.demonstrations_train, axis=0)
+        mean_traj = torch.from_numpy(mean_traj).cuda()
         full_traj = mean_traj[...,0]
         next_traj = mean_traj[...,1]
         vel_traj = (next_traj - full_traj)/self.delta_t
-        y_traj = torch.cat([torch.from_numpy(full_traj) , torch.from_numpy(vel_traj)],dim=1)
+        
+        vel_traj = normalize_state(vel_traj,
+                                            x_min=self.min_vel.reshape(1, self.dim_workspace),
+                                            x_max=self.max_vel.reshape(1, self.dim_workspace))
+        
+        
+        y_traj = torch.cat([full_traj , vel_traj],dim=1)
         y_traj = y_traj.to(dtype=next(self.model.parameters()).dtype, device=next(self.model.parameters()).device)
         
+        self.y_traj_latent = self.compute_targets_from_traj_4d(y_traj,dim=self.latent_space_dim).cuda()
         self.demo_traj = y_traj
 
-        
+
