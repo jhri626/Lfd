@@ -83,7 +83,7 @@ def gvf_R2(xsample, eta, xtraj, xdottraj):
     else:
         return V1 + eta * vel
 
-def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius):
+def gvf_R2_np(xsample, eta, xtraj, xdottraj, metric, dist_radius):
     """
     Compute vector field for given sample points
     
@@ -133,6 +133,7 @@ def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius)
         # print("a",top_n_argmin[i][:10])    
 
     index_closest = np.empty(B, dtype=int)  # final indices per batch
+    # distances_with_vel = np.empty(B)  # final distances per batch
 
     if metric == 'sasaki':
         for batch in range(B):
@@ -140,7 +141,6 @@ def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius)
             idx = top_n_argmin[batch]
             # print(distance_pos[:,80:100])
             # print(distance_pos[:,350:355])
-                
             if idx.size == 0:
                 # fallback to nearest by position if no candidate under the radius
                 iter = 0
@@ -175,6 +175,7 @@ def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius)
             # print(idx,dist_bt,pos_dist, vel_dist)
             k_best = int(np.argmin(dist_bt, axis=1)[0])    # scalar index within idx
             index_closest[batch] = idx[k_best]
+            # distances_with_vel[batch] = dist_bt[0,k_best]
             # print(index_closest[batch])
 
 
@@ -210,7 +211,7 @@ def gvf_R2_np(xsample, eta, xtraj, xdottraj, vel_norm_stat, metric, dist_radius)
     else:
         # print(V1[0],vel[0])
         # print((V1 + eta * vel)[0])
-        return V1 + eta * vel , dist  # Return both the vector field and the distance norm
+        return V1 + eta * vel , dist # Return both the vector field and the distance norm
 
 def streamline_plot_R2(xtraj, xdottraj=None, eta=5, grid_step = 101, a_max=50, ax=None, figsize=(10,10), self=None):
     # set

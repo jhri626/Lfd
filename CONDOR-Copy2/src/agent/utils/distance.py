@@ -1,6 +1,7 @@
 import numpy as np
+import torch
+from agent.utils.S2_functions import parallel_transport
 
-import numpy as np
 
 def angle_between(u, v, degrees=False):
     """
@@ -114,7 +115,7 @@ def sasaki_R2(seq1, seq2, lambda_horiz=1.0, lambda_vert=1e-1,
 
 
 
-import numpy as np
+
 
 def _build_A(v_ref, beta_mag=1.0, alpha_dir=10.0, sigma=0.5, eps=1e-12, tau=1e-6):
     """
@@ -185,7 +186,7 @@ def _build_A(v_ref, beta_mag=1.0, alpha_dir=10.0, sigma=0.5, eps=1e-12, tau=1e-6
 
 def riemann_anisotropic_distance(seq1, seq2,
                                  lambda_horiz=1.0,
-                                 lambda_vert=1.0,
+                                 lambda_vert=0.1,
                                  alpha_dir=10.0,
                                  beta_mag=1.0,
                                  sigma=0.5,
@@ -265,6 +266,181 @@ def riemann_anisotropic_distance(seq1, seq2,
     dv_col = dv[..., None]                 # (B, T, 2, 1)
     tmp = np.matmul(A, dv_col)             # (B, T, 2, 1)
     vel_dist = np.matmul(dv_col.transpose(0,1,3,2), tmp)[..., 0, 0]  # (B, T)
+
+    distances = lambda_horiz * pos_dist + lambda_vert * vel_dist
+    return distances, pos_dist, vel_dist
+
+
+# ---------- small helpers (torch) ----------
+
+def _safe_normalize(x: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Normalize along the last dim with numerical safety."""
+    n = torch.linalg.norm(x, dim=-1, keepdim=True).clamp_min(eps)
+    return x / n
+
+def _project_tangent(x: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """
+    Project v onto the tangent plane at x on S^2: v_tan = v - <v, x> x.
+    x, v: (..., 3)
+    """
+    return v - (torch.sum(v * x, dim=-1, keepdim=True) * x)
+
+def _geodesic_angle(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    """
+    Geodesic angle theta in [0, pi] between unit vectors x, y in R^3.
+    x, y: (..., 3) (assumed unit or near-unit)
+    """
+    c = torch.sum(x * y, dim=-1).clamp(-1.0, 1.0)
+    return torch.arccos(c)
+
+def _build_A_tangent3_torch(
+    v_ref: torch.Tensor,
+    x_anchor: torch.Tensor,
+    beta_mag: float = 1.0,
+    alpha_dir: float = 10.0,
+    sigma: float = 0.5,
+    eps: float = 1e-12,
+    tau: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Build an SPD matrix A acting on the tangent plane at x_anchor (S^2 ⊂ R^3).
+
+    Args:
+        v_ref: (..., 3) reference velocity (in tangent at x_anchor)
+        x_anchor: (..., 3) anchor points on S^2
+    Returns:
+        A: (..., 3, 3) SPD matrices s.t. <dv, A dv> = a_par||dv_par||^2 + a_perp||dv_perp||^2
+    """
+    device = x_anchor.device
+    dtype = x_anchor.dtype
+
+    x_anchor = _safe_normalize(x_anchor, eps=eps)
+    # ensure tangency of v_ref
+    v_ref = _project_tangent(x_anchor, v_ref)
+
+    # tangent projector P_tan = I - x x^T
+    I3 = torch.eye(3, dtype=dtype, device=device)
+    P_tan = I3.expand(*x_anchor.shape[:-1], 3, 3) - x_anchor.unsqueeze(-1) * x_anchor.unsqueeze(-2)  # (...,3,3)
+
+    # default isotropic in tangent: beta_mag * P_tan
+    A = beta_mag * P_tan
+
+    # speed and small-speed mask
+    s = torch.linalg.norm(v_ref, dim=-1, keepdim=True)             # (...,1)
+    small = (s[..., 0] < tau)
+    if torch.all(small):
+        return A  # fully isotropic where speeds are tiny
+
+    # anisotropy for non-small speeds
+    idx = ~small
+    v_sel = v_ref[idx]                                             # (N,3)
+    x_sel = x_anchor[idx]                                          # (N,3)
+    P_tan_sel = P_tan[idx]                                         # (N,3,3)
+
+    s_sel = torch.linalg.norm(v_sel, dim=-1, keepdim=True)         # (N,1)
+    u = v_sel / (s_sel + eps)                                      # (N,3) unit direction in tangent
+
+    # parallel / perpendicular projectors inside the tangent space
+    P_par = u.unsqueeze(-1) @ u.unsqueeze(-2)                      # (N,3,3)
+    P_perp = P_tan_sel - P_par                                     # (N,3,3)
+
+    s2 = (s_sel[..., 0] ** 2)                                      # (N,)
+    extra_perp = (alpha_dir / 2.0) * (s2 / (s2 + sigma**2)**2)     # (N,)
+    a_par = beta_mag
+    a_perp = beta_mag + extra_perp                                 # (N,)
+
+    A_sel = a_par * P_par + a_perp.unsqueeze(-1).unsqueeze(-1) * P_perp
+    A[idx] = A_sel
+    return A
+
+
+# ---------- main distance on S^2 (torch) ----------
+
+def riemann_anisotropic_distance_S2(
+    seq1: torch.Tensor,
+    seq2: torch.Tensor,
+    *,
+    lambda_horiz: float = 1.0,
+    lambda_vert: float = 1e-2,  #5e-3
+    alpha_dir: float = 10.0,
+    beta_mag: float = 1.0,
+    sigma: float = 0.5,
+    eps: float = 1e-12,
+    tau: float = 1e-6,
+    v_ref_mode: str = "mean",   # {"mean","seq1","seq2"}
+    anchor: str = "seq2",       # {"seq1","seq2"}
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Direction-sensitive Riemannian quadratic distance on S^2 (positions + velocities), PyTorch.
+
+    Inputs:
+        seq1, seq2: (B, T, 6) where each step stores [x(3), v(3)], with x ∈ S^2, v ∈ T_x S^2 (approximately).
+
+    Returns:
+        distances: (B, T) = lambda_horiz * theta^2 + lambda_vert * <dv, A dv>
+        pos_dist : (B, T) = theta^2
+        vel_dist : (B, T) = quadratic form in the anchor tangent space
+
+    Notes:
+        - Uses existing 'parallel_transport(x1, x2, V)' from your code for velocity alignment.
+        - All intermediate x are normalized and all v are projected to tangent for robustness.
+    """
+    assert seq1.size(-1) == 6, "Expected (B,T,6) inputs"
+
+    device = seq1.device
+    dtype = seq1.dtype
+    B, T, _ = seq1.shape
+
+    # split and clean inputs
+    x1 = _safe_normalize(seq1[..., :3], eps=eps)              # (B,T,3)
+    x2 = _safe_normalize(seq2[..., :3], eps=eps)              # (B,T,3)
+    v1 = _project_tangent(x1, seq1[..., 3:])                  # (B,T,3)
+    v2 = _project_tangent(x2, seq2[..., 3:])                  # (B,T,3)
+
+    # position term: theta^2
+    theta = _geodesic_angle(x1, x2)                           # (B,T)
+    pos_dist = theta ** 2
+
+    # choose anchor tangent space and parallel-transport the other side
+    if anchor == "seq1":
+        xA = x1
+        # flatten to (B*T,3) for calling provided parallel_transport
+        x2f, x1f, v2f = x2.reshape(-1, 3), x1.reshape(-1, 3), v2.reshape(-1, 3)
+        v2_at_A_flat = parallel_transport(x2f, x1f, v2f)      # uses your existing function
+        v2_at_A = v2_at_A_flat.view(B, T, 3)
+        v1_at_A = v1
+    elif anchor == "seq2":
+        xA = x2
+        x1f, x2f, v1f = x1.reshape(-1, 3), x2.reshape(-1, 3), v1.reshape(-1, 3)
+        v1_at_A_flat = parallel_transport(x1f, x2f, v1f)      # uses your existing function
+        v1_at_A = v1_at_A_flat.view(B, T, 3)
+        v2_at_A = v2
+    else:
+        raise ValueError("anchor must be 'seq1' or 'seq2'")
+
+    # choose reference velocity for anisotropic weighting
+    if v_ref_mode == "mean":
+        v_ref = 0.5 * (v1_at_A + v2_at_A)
+    elif v_ref_mode == "seq1":
+        v_ref = v1_at_A
+    elif v_ref_mode == "seq2":
+        v_ref = v2_at_A
+    else:
+        raise ValueError("v_ref_mode must be one of {'mean','seq1','seq2'}")
+
+    # velocity difference in anchor tangent space (and safety projection)
+    dv = _project_tangent(xA, (v1_at_A - v2_at_A))            # (B,T,3)
+
+    # build anisotropic SPD matrix on tangent(xA)
+    A = _build_A_tangent3_torch(
+        v_ref, xA, beta_mag=beta_mag, alpha_dir=alpha_dir, sigma=sigma, eps=eps, tau=tau
+    )                                                         # (B,T,3,3)
+
+    # quadratic form: dv^T A dv
+    dv_col = dv.unsqueeze(-1)                                 # (B,T,3,1)
+    tmp = torch.matmul(A, dv_col)                             # (B,T,3,1)
+    vel_dist = torch.matmul(dv_col.transpose(-2, -1), tmp)[..., 0, 0]  # (B,T)
+    
 
     distances = lambda_horiz * pos_dist + lambda_vert * vel_dist
     return distances, pos_dist, vel_dist

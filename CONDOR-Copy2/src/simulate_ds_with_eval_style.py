@@ -25,11 +25,11 @@ ALLOW_RANGE_3 = [
 parser = argparse.ArgumentParser(description='Simulate dynamical system with evaluation style plotting')
 parser.add_argument('--random', type=str, default='false', choices=['true', 'false'],
                     help='Whether to use random sampling around initial points (true/false)')
-parser.add_argument('--num-samples', type=int, default=14,
+parser.add_argument('--num-samples', type=int, default=15,
                     help='Number of random samples to generate when --random=true')
 parser.add_argument('--noise-std', type=float, default=0.1,
                     help='Standard deviation of noise for random sampling')
-parser.add_argument('--sampling-mode', type=str, default='all', choices=['all', 'init'],
+parser.add_argument('--sampling-mode', type=str, default='pre', choices=['all', 'init','pre'],
                     help='Sampling mode: "all" for trajectory sampling, "init" for initial points only')
 args = parser.parse_args()
 
@@ -51,9 +51,10 @@ params = Params(results_base_directory)
 params.results_path += params.selected_primitives_ids + '/'
 params.load_model = True
 
-results_directory = results_base_directory + "test8/cos_sim_99/" + params.name + "/" + params.selected_primitives_ids + "/"
+results_directory = results_base_directory + "baseline/" + params.name + "/" + params.selected_primitives_ids + "/"
 os.makedirs(results_directory, exist_ok=True)
 # Initialize framework to get demonstration data
+print(params.results_path)
 learner, _, data = initialize_framework(params, params_name, verbose=False)
 
 # Get demonstration trajectories for uniform sampling
@@ -265,7 +266,19 @@ if args.random.lower() == 'true':
         title += f' ({args.sampling_mode} sampling: {args.num_samples} samples, std={args.noise_std})'
 else:
     print("Using predefined initial states")
-    x_t_init_positions = x_t_init_base.copy()
+    
+    # Try to load saved initial states first
+    saved_initial_states_path = 'exp_result/state_dynamics/'+ params.space +'/new_metric'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/stats/random_initial_states.npy'
+    if os.path.exists(saved_initial_states_path):
+        print(f"Loading saved initial states from: {saved_initial_states_path}")
+        x_t_init_positions = np.load(saved_initial_states_path)[:,:2]
+        print(f"Loaded {len(x_t_init_positions)} initial states from saved file")
+        unique_indices = np.zeros(len(x_t_init_positions),dtype=int)  # No unique indices in init mode
+    else:
+        print(f"Saved initial states not found at: {saved_initial_states_path}")
+        print("Using hardcoded fallback initial states")
+        x_t_init_positions = x_t_init_base.copy()
+    
     # Add zero velocities for predefined states (original behavior)
     x_t_init_velocities = np.zeros((x_t_init_positions.shape[0], 2))
 
@@ -275,8 +288,6 @@ else:
 
 
 x_t_init = np.hstack((x_t_init_positions, x_t_init_velocities))
-print(x_t_init[0:5,:])
-print(unique_indices)
 
 
 
@@ -498,7 +509,7 @@ print(demo_trajectories_torch.shape)
 
 cos_dist_list = []
 
-window_size = demonstrations_eval.shape[1] // 10  # Search window size for closest distance calculation
+window_size = demonstrations_eval.shape[1] // 20  # Search window size for closest distance calculation
 for i, sim_traj in enumerate(sim_trajectories_torch):
     print(f"\nProcessing trajectory {i+1}/{len(sim_trajectories_torch)}")
     # print("sim_traj_vel", sim_trajectories_velocities[15:20,:])

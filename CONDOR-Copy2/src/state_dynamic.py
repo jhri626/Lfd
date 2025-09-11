@@ -1,7 +1,12 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from agent.utils.R2_functions import gvf_R2_np 
 from agent.utils.dynamical_system_operations import normalize_state
+from agent.utils.S2_functions import exp_sphere, xdot_to_qdot, x_to_q, q_to_x
+from agent.utils.gvf import cvf_sphere_2nd_order
+from tqdm import tqdm
+
 
 class StateDynamic:
     """
@@ -14,9 +19,10 @@ class StateDynamic:
         self.delta_t = params.delta_t
         self.traj = traj
         self.eta = params.eta
-        self.metric = params.metric
+        self.metric = 'sasaki'
         self.vel_norm_stat = vel_norm_stat
         self.dist = 2 * np.ones(sample) if sample is not None else None
+        self.space = params.space
 
         self.max_steps = max_steps if max_steps is not None else 10000  
         self.dist_history = np.zeros((self.max_steps, sample if sample else 1))
@@ -38,7 +44,10 @@ class StateDynamic:
             next_state: predicted next state
         """
         if isinstance(state, torch.Tensor):
-            state = state.detach().cpu().numpy().copy()
+            if self.space == "euclidean":
+                state = state.detach().cpu().numpy().copy()
+            elif self.space == "sphere":
+                pass
         else:
             state = np.array(state, dtype=float, copy=True)
         
@@ -70,21 +79,7 @@ class StateDynamic:
             # Batch processing with numpy vectorization
             batch_size = state.shape[0]
             
-            if self.dynamical_system_order == 1:
-                # First order batch processing: dx/dt = (x_goal - x)
-                positions = state[:, :self.workspace_dimensions]  # [batch_size, workspace_dim]
-                
-                # Broadcast goal to match batch size
-                goal_batch = np.tile(self.goal[:self.workspace_dimensions], (batch_size, 1))  # [batch_size, workspace_dim]
-                velocities = goal_batch - positions  # [batch_size, workspace_dim]
-                
-                # Integration: x_next = x + dt * dx/dt
-                next_positions = positions + self.delta_t * velocities
-                next_state = next_positions
-                
-                
-                
-            elif self.dynamical_system_order == 2:
+            if self.space == "euclidean":
                 # Second order batch processing
                 positions = state[:, :self.workspace_dimensions]  # [batch_size, workspace_dim]
                 
@@ -95,7 +90,7 @@ class StateDynamic:
                 xdottraj = self.traj[:,:, self.workspace_dimensions:]
                 vel_norm_stat = self.vel_norm_stat
                 # print("state",state)
-                velocities, dist = gvf_R2_np(state, self.eta , xtraj, xdottraj,vel_norm_stat, self.metric, self.dist)  # Goal-directed dynamics
+                velocities, dist  = gvf_R2_np(state, self.eta , xtraj, xdottraj, self.metric, self.dist)  # Goal-directed dynamics
                 
                 if self.current_step < self.max_steps:
                     self.dist_history[self.current_step] = dist
@@ -109,6 +104,54 @@ class StateDynamic:
                 # Concatenate positions and velocities
                 next_state = np.concatenate([next_positions, velocities], axis=1)
                 # next_state = np.concatenate([next_positions, velocities], axis=1)
+
+            elif self.space == "sphere":
+                # Spherical space dynamics (placeholder)
+                positions = state[:, :self.workspace_dimensions].float()  # [batch_size, workspace_dim]
+                
+                # Broadcast goal to match batch size
+                goal_batch = self.goal[:self.workspace_dimensions].repeat(batch_size, 1)
+                # velocities = 0.1 * (goal_batch - positions)  # [batch_size, workspace_dim]
+                xtraj = self.traj[:,:, :self.workspace_dimensions]
+                xdottraj = self.traj[:,:, self.workspace_dimensions:]
+                # print("state",state)
+    
+                velocities, dist, check, idx = cvf_sphere_2nd_order(state, self.eta , xtraj, xdottraj, self.dist)  # Goal-directed dynamics
+                # print(dist.shape)
+                if self.current_step < self.max_steps:
+                    self.dist_history[self.current_step] = dist
+                    self.current_step += 1
+                self.dist = np.maximum(dist, 1e-3)
+                # print(dist,q_to_x(positions))
+                # Integration: x_next = x + dt * dx/dt
+                # velocities = xdot_to_qdot(velocities,positions)
+                # print("velocities",velocities,positions)
+                
+                next_positions = exp_sphere(positions, self.delta_t * velocities)
+                
+                # print(next_positions.shape)
+                # print("next_positions",next_positions)
+                next_positions = x_to_q(next_positions)  # Ensure next positions are on the sphere
+                
+                # if check:
+                #     print(idx)
+                #     xyz_pos = q_to_x(positions[idx])
+                #     xyz_pos_next = q_to_x(next_positions[idx])
+                #     print(xyz_pos, xyz_pos_next, velocities[idx], xdot_to_qdot(velocities, next_positions)[idx])
+                velocities = xdot_to_qdot(velocities, next_positions)  # Convert velocities to spherical space  
+                # if check:
+                #     xyz_pos = q_to_x(positions[batch_list])
+                #     xyz_pos_next = q_to_x(next_positions[batch_list])
+                #     print("check",xyz_pos, velocities[batch_list], xyz_pos_next)
+                
+                # if check:
+                #     print(positions[idx], next_positions[idx], velocities[idx])
+                
+                
+
+                # Concatenate positions and velocities
+                next_state = torch.cat([next_positions, velocities], dim=-1)
+                
             else:
                 raise ValueError(f"Unsupported order: {self.dynamical_system_order}")
         else:
@@ -126,7 +169,9 @@ class StateDynamic:
             trajectory: simulated trajectory [steps, state_dim] or [batch_size, steps, state_dim]
         """
         if isinstance(initial_state, torch.Tensor):
-            initial_state = initial_state.numpy()
+            if self.space == "euclidean":
+                initial_state = initial_state.numpy()
+        
             
         # Handle both single state and batch processing
         if initial_state.ndim == 1:
@@ -194,50 +239,89 @@ class StateDynamic:
         Returns:
             trajectories: simulated trajectories [batch_size, steps, state_dim]
         """
-        batch_size, state_dim = initial_states.shape
-        trajectories = np.zeros((batch_size, self.max_steps, state_dim))
-        trajectories[:, 0, :] = initial_states
-        
-        current_states = initial_states.copy()
-        active_mask = np.ones(batch_size, dtype=bool)  # Track which trajectories are still active
+        if self.space == "euclidean":
+            batch_size, state_dim = initial_states.shape
+            trajectories = np.zeros((batch_size, self.max_steps, state_dim))
+            trajectories[:, 0, :] = initial_states
+            
+            current_states = initial_states.copy()
+            active_mask = np.ones(batch_size, dtype=bool)  # Track which trajectories are still active
 
-        for i in range(1, self.max_steps):
-            # print("current states 0",current_states, "step",i)
-            if not np.any(active_mask):
-                # All trajectories have converged
-                trajectories = trajectories[:, :i, :]
-                break
+            for i in tqdm(range(1, self.max_steps)):
+                # print("current states 0",current_states, "step",i)
+                if not np.any(active_mask):
+                    # All trajectories have converged
+                    trajectories = trajectories[:, :i, :]
+                    break
+                    
+                # Only compute dynamics for active trajectories
+                # if np.all(active_mask):
+                    # All trajectories are active, process all at once
+                # print("current states",current_states, "step",i)
+                next_states = self.compute_dynamics(current_states.copy())
+                # print("next state",next_states, "step",i)
+
+                # print(f"next_states shape: {next_states}")
+                # else:
+                #     # Some trajectories have converged, process only active ones
+                #     active_states = current_states[active_mask]
+                #     next_active_states = self.compute_dynamics(active_states)
+                    
+                #     # Update only active trajectories
+                #     next_states = current_states.copy()
+                #     next_states[active_mask] = next_active_states
                 
-            # Only compute dynamics for active trajectories
-            # if np.all(active_mask):
-                # All trajectories are active, process all at once
-            # print("current states",current_states, "step",i)
-            next_states = self.compute_dynamics(current_states.copy())
-            # print("next state",next_states, "step",i)
-            
-            # print(f"next_states shape: {next_states}")
-            # else:
-            #     # Some trajectories have converged, process only active ones
-            #     active_states = current_states[active_mask]
-            #     next_active_states = self.compute_dynamics(active_states)
+                trajectories[:, i, :] = next_states
+                current_states = next_states.copy()
+                # print("current_states 2",current_states, "step",i,"\n")
                 
-            #     # Update only active trajectories
-            #     next_states = current_states.copy()
-            #     next_states[active_mask] = next_active_states
-            
-            trajectories[:, i, :] = next_states
-            current_states = next_states.copy()
-            # print("current_states 2",current_states, "step",i,"\n")
-            
-            
-            # Check for convergence
-            positions = current_states[:, :self.workspace_dimensions]
-            goal_batch = np.tile(self.goal[:self.workspace_dimensions], (batch_size, 1))
-            distances = np.linalg.norm(positions - goal_batch, axis=1)
-            
-            # Update active mask (mark converged trajectories as inactive)
-            active_mask = active_mask & (distances >= 1e-3)
+                
+                # Check for convergence
+                positions = current_states[:, :self.workspace_dimensions]
+                goal_batch = np.tile(self.goal[:self.workspace_dimensions], (batch_size, 1))
+                distances = np.linalg.norm(positions - goal_batch, axis=1)
+                
+                # Update active mask (mark converged trajectories as inactive)
+                active_mask = active_mask & (distances >= 1e-3)
             # print("current_states 3",current_states,"\n")
+        elif self.space == "sphere":
+            device, dtype = initial_states.device, initial_states.dtype
+            batch_size, state_dim = initial_states.shape
+
+            # Allocate tensor for trajectories
+            trajectories = torch.zeros((batch_size, self.max_steps, state_dim),
+                                    device=device, dtype=dtype)
+            trajectories[:, 0, :] = initial_states
+
+            current_states = initial_states.clone()
+            active_mask = torch.ones(batch_size, dtype=torch.bool, device=device)  # Track active trajectories
+
+            for i in tqdm(range(1, self.max_steps)):
+            # for i in range(1, self.max_steps):
+                if not torch.any(active_mask):
+                    # All trajectories have converged ¡æ truncate
+                    trajectories = trajectories[:, :i, :]
+                    break
+                
+                # Compute dynamics for all active states
+                # print("\ncurrent",current_states[5,:], "step",i)
+                next_states = self.compute_dynamics(current_states.clone())
+                # print("next",next_states[5,:], "step",i)
+
+                # Save trajectory
+                trajectories[:, i, :] = next_states
+                current_states = next_states.clone()
+
+                # Check convergence (distance to goal)
+                positions = current_states[:, :self.workspace_dimensions]
+                goal_batch = self.goal[:self.workspace_dimensions].to(device).repeat(batch_size, 1)
+                distances = 1- F.cosine_similarity(q_to_x(positions),q_to_x(goal_batch), dim=1)
+                # if i == self.max_steps - 1:
+                #     print(positions,goal_batch)
+                
+
+                # Update active mask
+                active_mask = active_mask & (distances >= 1e-3)
         
         return trajectories
     

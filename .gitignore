@@ -18,3 +18,10 @@ venv/
 ENV/
 .DS_Store
 config.yaml
+*test7/
+*test8/
+*exp_result/
+*.pdf
+*.png
+*.txt
+*.npy
