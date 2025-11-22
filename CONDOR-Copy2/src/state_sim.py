@@ -36,10 +36,11 @@ def get_workspace_bounds(demonstrations, params):
     
     return min_bounds, max_bounds
 
-def cal_lyapunov_exponent(distance_traj, terminal_time=1, eps=1e-6):
+def cal_lyapunov_exponent(distance_traj, terminal_time=1, eps=1e-6, delta_t=0.005):
     '''
     From BCSDM curve_analysis.py
     '''
+    # print("terminal_time",terminal_time)
     # input = ((nd), nt)
     input_size = distance_traj.shape
     len_traj = input_size[-1]
@@ -66,28 +67,43 @@ def cal_lyapunov_exponent(distance_traj, terminal_time=1, eps=1e-6):
             if distance_traj[i][j] < eps:
                 distance_truncated = distance_traj[i][:j+1]
                 # print(j)
+                # print(distance_truncated)
                 break
             else:
                 distance_truncated = distance_traj[i]
-                print
+
         
-        t_linspace = torch.linspace(0, terminal_time, len(distance_truncated)).to(distance_traj)
+        if len(distance_truncated) < 2:
+            lamb_list.append(float('nan'))
+            continue
+        # if j < 100:
+        #     lamb_list.append(float('nan')) # to short traj could make wrong lyapunov
+        #     continue 
+        
+
+        terminal_time_traj = j * terminal_time * delta_t
+        terminal_time_traj = torch.as_tensor(terminal_time_traj, dtype=torch.float32)
+        # print(i,terminal_time_traj)
+        t_linspace = torch.linspace(0, terminal_time_traj, len(distance_truncated)).to(distance_traj)
         log_dist_traj = torch.log(distance_truncated).unsqueeze(-1) # ((nd), nt, 1)
         log_d0 = log_dist_traj[..., 0:1, 0:1]
         lamb = (torch.pinverse(t_linspace.unsqueeze(-1)) 
                 @ (log_d0 - log_dist_traj)).squeeze().squeeze()
         lamb_list.append(lamb)
+        # print(f"{i}th traj, lyapunov: {lamb:.4e}")
     lamb = torch.tensor(lamb_list)
+    
     # shape: (nd, ) or ()
     return lamb
 
 
 def main(num = int):
     # Get arguments
+    # TODO we need more baseline (SEDS, euclidean flow)
     parser = ArgumentParser()
     parser.add_argument('--params', type=str, default='2nd_order_2D', help='Parameter file name')
     parser.add_argument('--results-base-directory', type=str, default='./', help='Base directory for results')
-    parser.add_argument('--simulation-steps', type=int, default=2800, help='Number of simulation steps')
+    parser.add_argument('--simulation-steps', type=int, default=5500, help='Number of simulation steps')
     parser.add_argument('--sample', type=int, default=25, help='Number of random initial states to generate')
     parser.add_argument('--use-model', type=str, default='false', choices=['true', 'false'], 
                         help='Whether to use learned model for simulation (true/false)')
@@ -116,7 +132,10 @@ def main(num = int):
         params.save_path = 'exp_result/state_dynamics/'+ params.space +'/baseline/' + params.name + '/' + params.selected_primitives_ids + '/'
         params.delta_t = 1
     else:
-        params.save_path = 'exp_result/state_dynamics/'+ params.space +'/new_metric'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/'
+        # params.save_path = 'exp_result/state_dynamics/'+ params.space +'/test'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/'
+        # params.save_path = 'exp_result/state_dynamics/'+ params.space +'/new_metric'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/'
+        params.save_path = 'exp_result/state_dynamics/'+ params.space +'/dir_test/'+str(params.trajectories_resample_length) + '/dir'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/'
+        # params.save_path = 'exp_result/state_dynamics/'+ params.space +'/1st_order'+'/eta' + str(params.eta) +'/'+ params.selected_primitives_ids + '/'
     
     # Create results directory
     
@@ -136,11 +155,12 @@ def main(num = int):
     # Extract relevant data
     # demonstrations = data['demonstrations raw']
     demonstrations_norm = data['demonstrations train'][:,:,:,0]
+    time_scale_factor = data['demonstrations raw'][0].shape[1]
     demonstrations_norm = lpf_demonstrations(demonstrations_norm,
-                                         fs=1.0,   # if samples are unit-spaced
-                                         L_min=30, # remove variations shorter than 30 samples
-                                         order=4)
-    
+                                        fs=1.0,   # if samples are unit-spaced
+                                        L_min=30, # remove variations shorter than 30 samples
+                                        order=4)
+
     
     x_min, x_max = data['x min'], data['x max']
     vel_min, vel_max = data['vel min train'], data['vel max train']
@@ -198,9 +218,18 @@ def main(num = int):
         if params.dynamical_system_order == 2:
             print("\nNote: Dynamical system order is set to 2, using second-order dynamics.")
             velocity = (demonstrations_norm[:, 1:, :] - demonstrations_norm[:, :-1, :])/ params.delta_t
+            dummy_vel = 1
+            
+            # while np.linalg.norm(velocity[:,0,:]) < 1e-5:
+            #     velocity[:,0,:] = (demonstrations_norm[:, dummy_vel, :] - demonstrations_norm[:, 0, :])/ dummy_vel*params.delta_t
+            #     dummy_vel += 1
+            
             # vel_start = (demonstrations_norm[:, 0, :] - demonstrations_norm[:, 1, :])/ params.delta_t
             # vel_start = np.expand_dims(vel_start, axis=1)  # Add as first point
             velocity = np.concatenate((velocity ,np.zeros((velocity.shape[0], 1, params.workspace_dimensions))), axis=1)  # Add zero velocity for last point
+            # print(velocity[0,:10,:])
+            # print(demonstrations_norm[0,:10,:])
+            
             # velocity = np.concatenate((vel_start,velocity ,np.zeros((velocity.shape[0], 1, params.workspace_dimensions))), axis=1)  # Add zero velocity for last point
             traj = np.concatenate((demonstrations_norm, velocity), axis=2)  # Combine position and velocity
         else:
@@ -215,8 +244,8 @@ def main(num = int):
     # Initialize state dynamics
     print("\nInitializing state dynamics...")
     init_state_dynamics = StateDynamic(params ,traj,vel_norm_stat=[vel_min, vel_max], sample=args.sample, max_steps=args.simulation_steps)
-    grid_state_dynamics = StateDynamic(params ,traj,vel_norm_stat=[vel_min, vel_max], sample=args.sample, max_steps=args.simulation_steps)
-    all_state_dynamics = StateDynamic(params ,traj,vel_norm_stat=[vel_min, vel_max], sample=args.sample, max_steps=args.simulation_steps)
+    # grid_state_dynamics = StateDynamic(params ,traj,vel_norm_stat=[vel_min, vel_max], sample=25, max_steps=args.simulation_steps)
+    # all_state_dynamics = StateDynamic(params ,traj,vel_norm_stat=[vel_min, vel_max], sample=1, max_steps=args.simulation_steps)
 
     # Generate random initial states
     
@@ -224,28 +253,28 @@ def main(num = int):
     
     if params.space == "euclidean":
         random_initial_states = generate_random_initial_states(args.sample, params, demonstrations_norm, mode='init', sampling_std=0.1)
-        grid_initial_states = generate_random_initial_states(args.sample, params, demonstrations_norm, mode='grid')
-        all_initial_states = generate_random_initial_states(args.sample, params, demonstrations_norm, mode='all')
+        grid_initial_states = generate_random_initial_states(25, params, demonstrations_norm, mode='grid')
+        all_initial_states = generate_random_initial_states(1, params, demonstrations_norm, mode='all')
     elif params.space == "sphere":
         random_initial_states = generate_random_initial_states_s2(args.sample, params, q_traj, mode='init')
-        grid_initial_states = generate_random_initial_states_s2(args.sample, params, q_traj, mode='grid')
-        all_initial_states = generate_random_initial_states_s2(args.sample, params, q_traj, mode='all')
+        # grid_initial_states = generate_random_initial_states_s2(25, params, q_traj, mode='grid')
+        # all_initial_states = generate_random_initial_states_s2(50, params, q_traj, mode='all')
 
 
     # print("init_state",random_initial_states.shape,grid_initial_states.shape, all_initial_states.shape)
     
     # Save initial points as npy files
     random_initial_save_path = params.save_path + 'stats/random_initial_states.npy'
-    grid_initial_save_path = params.save_path + 'stats/grid_initial_states.npy'
-    all_initial_save_path = params.save_path + 'stats/all_initial_states.npy'
+    # grid_initial_save_path = params.save_path + 'stats/grid_initial_states.npy'
+    # all_initial_save_path = params.save_path + 'stats/all_initial_states.npy'
     
     np.save(random_initial_save_path, random_initial_states)
-    np.save(grid_initial_save_path, grid_initial_states)
-    np.save(all_initial_save_path, all_initial_states)
+    # np.save(grid_initial_save_path, grid_initial_states)
+    # np.save(all_initial_save_path, all_initial_states)
     
     print(f"Random initial states saved to: {random_initial_save_path}")
-    print(f"Grid initial states saved to: {grid_initial_save_path}")
-    print(f"All initial states saved to: {all_initial_save_path}")
+    # print(f"Grid initial states saved to: {grid_initial_save_path}")
+    # print(f"All initial states saved to: {all_initial_save_path}")
 
     # Run initial point simulation
     print(f"\Goal position: {init_state_dynamics.goal[:params.workspace_dimensions]}")
@@ -259,6 +288,11 @@ def main(num = int):
         
         # Initialize framework to get the learner
         params.results_path += params.selected_primitives_ids + '/'
+        print("Loading model from:", params.results_path)
+        if params.multi:
+            params.dataset_name = 'LAIR'
+            params.save_path = 'exp_result/state_dynamics/'+ params.space +'/baseline/' + params.name + '/original/' + params.selected_primitives_ids + '/'
+            create_directories(params.save_path)
         learner, _, model_data = initialize_framework(params, args.params, verbose=False)
         
         # Prepare initial states for model simulation
@@ -270,16 +304,18 @@ def main(num = int):
         def simulate_with_model(initial_states, simulation_steps):
             # Initialize dynamical system with the learned model
             dynamical_system = learner.init_dynamical_system(
-                initial_states=torch.FloatTensor(initial_states).cuda(), 
-                delta_t=params.delta_t
+                initial_states=torch.FloatTensor(initial_states).cuda()
             )
-            
+            # print(initial_states[0])
             # Simulate trajectories
             simulated_trajectories = [initial_states]
             for i in range(simulation_steps):
                 # Do transition
                 x_t = dynamical_system.transition(space='task')['desired state']
                 simulated_trajectories.append(x_t.cpu().detach().numpy())
+                # if i < 20:
+                #     print(x_t[0])
+            print("Simulation with model completed.")
             
             # Convert to numpy array: shape (time_steps, n_trajectories, state_dim)
             simulated_trajectories = np.array(simulated_trajectories)
@@ -300,12 +336,12 @@ def main(num = int):
     else:
         # Use existing StateDynamic simulation
         batch_trajectories = init_state_dynamics.simulate(random_initial_states)
-        
+        # quit()
         print(f"\nRunning grid point simulation for {args.simulation_steps} steps...")
-        grid_trajectories = grid_state_dynamics.simulate(grid_initial_states)
+        # grid_trajectories = grid_state_dynamics.simulate(grid_initial_states)
         
         print(f"\nRunning all point simulation for {args.simulation_steps} steps...")
-        all_trajectories = all_state_dynamics.simulate(all_initial_states)
+        # all_trajectories = all_state_dynamics.simulate(all_initial_states)
     
     simulation_time = time.time() - start_time
     
@@ -317,82 +353,110 @@ def main(num = int):
     individual_trajectories = np.array(individual_trajectories)  # Convert to numpy array if needed
     
     # Convert grid trajectories to list of individual trajectories
-    individual_grid_trajectories = [grid_trajectories[i] for i in range(len(grid_trajectories))]
-    individual_grid_trajectories = np.array(individual_grid_trajectories)  # Convert to numpy array if needed
+    # individual_grid_trajectories = [grid_trajectories[i] for i in range(len(grid_trajectories))]
+    # individual_grid_trajectories = np.array(individual_grid_trajectories)  # Convert to numpy array if needed
 
-    individual_all_trajectories = [all_trajectories[i] for i in range(len(all_trajectories))]
-    individual_all_trajectories = np.array(individual_all_trajectories)  # Convert to numpy array if needed
+    # individual_all_trajectories = [all_trajectories[i] for i in range(len(all_trajectories))]
+    # individual_all_trajectories = np.array(individual_all_trajectories)  # Convert to numpy array if needed
 
     # Analyze batch results
     if params.name not in ["PUMA","CONDOR"]:
         # Only analyze with StateDynamic objects when not using model
         analyze_batch_trajectories(individual_trajectories, params, init_state_dynamics)
-        analyze_batch_trajectories(individual_grid_trajectories, params, grid_state_dynamics)
-        analyze_batch_trajectories(individual_all_trajectories, params, all_state_dynamics)
+        # analyze_batch_trajectories(individual_grid_trajectories, params, grid_state_dynamics)
+        # analyze_batch_trajectories(individual_all_trajectories, params, all_state_dynamics)
 
         init_dist = torch.from_numpy(init_state_dynamics.get_dist_history())
-        grid_dist = torch.from_numpy(grid_state_dynamics.get_dist_history())
-        all_dist = torch.from_numpy(all_state_dynamics.get_dist_history())
-        print("init_dist",init_dist.shape)
+        # grid_dist = torch.from_numpy(grid_state_dynamics.get_dist_history())
+        # all_dist = torch.from_numpy(all_state_dynamics.get_dist_history())
+        # print("init_dist",init_dist.shape)
         # Save distance histories as npy files
         suffix = "_model" if args.use_model.lower() == 'true' else ""
         init_dist_save_path = params.save_path + f'stats/init_dist_history{suffix}.npy'
-        grid_dist_save_path = params.save_path + f'stats/grid_dist_history{suffix}.npy'
-        all_dist_save_path = params.save_path + f'stats/all_dist_history{suffix}.npy'
+        # grid_dist_save_path = params.save_path + f'stats/grid_dist_history{suffix}.npy'
+        # all_dist_save_path = params.save_path + f'stats/all_dist_history{suffix}.npy'
         
         np.save(init_dist_save_path, init_dist.numpy())
-        np.save(grid_dist_save_path, grid_dist.numpy())
-        np.save(all_dist_save_path, all_dist.numpy())
+        # np.save(grid_dist_save_path, grid_dist.numpy())
+        # np.save(all_dist_save_path, all_dist.numpy())
         
         # print(init_dist)
         
         print(f"Init distance history saved to: {init_dist_save_path}")
-        print(f"Grid distance history saved to: {grid_dist_save_path}")
-        print(f"All distance history saved to: {all_dist_save_path}")
+        # print(f"Grid distance history saved to: {grid_dist_save_path}")
+        # print(f"All distance history saved to: {all_dist_save_path}")
     else:
         # print("Model simulation: Distance history analysis skipped (not available with learned model)")
         # Create dummy distance tensors for plotting compatibility
-        init_dist = torch.zeros(args.sample, args.simulation_steps)
-        grid_dist = torch.zeros(args.sample, args.simulation_steps)
-        all_dist = torch.zeros(args.sample, args.simulation_steps)
-        traj_expanded = np.tile(traj, (args.sample, 1, 1))  # (B, T, D)
-        
-        for t in range(individual_trajectories.shape[1]):
-            point = individual_trajectories[:,t,:]
-            # print(individual_trajectories.shape, point.shape)
-            point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
-            # print(traj.shape[1])
-            # print(point_expanded.shape,traj_expanded.shape)
-            dist, _ , _ = riemann_anisotropic_distance(traj_expanded, point_expanded)
-            # print(dist.shape)
-            dist_min_idx = np.argmin(dist, axis=1)
-            dist_min = np.linalg.norm(traj_expanded[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
-            init_dist[:,t] = torch.from_numpy(dist_min)
-            # print(point,dist_min_idx,dist_min)
-        init_dist = init_dist.T
-        
-        for t in range(individual_grid_trajectories.shape[1]):
-            point = individual_grid_trajectories[:,t,:]
-            point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
-            dist, _ , _ = riemann_anisotropic_distance(traj_expanded, point_expanded)
-            dist_min_idx = np.argmin(dist, axis=1)
-            dist_min = np.linalg.norm(traj_expanded[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
-            grid_dist[:,t] = torch.from_numpy(dist_min)
-        grid_dist = grid_dist.T
-        
-        for t in range(individual_all_trajectories.shape[1]):
-            point = individual_all_trajectories[:,t,:]
-            point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
-            dist, _ , _ = riemann_anisotropic_distance(traj_expanded, point_expanded)
-            dist_min_idx = np.argmin(dist, axis=1)
-            dist_min = np.linalg.norm(traj_expanded[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
-            all_dist[:,t] = torch.from_numpy(dist_min)
-        all_dist = all_dist.T
-        # print(init_dist)
+        if params.dist == True:
+            init_dist = torch.zeros(args.sample, args.simulation_steps)
+            # grid_dist = torch.zeros(25, args.simulation_steps)
+            # all_dist = torch.zeros(100, args.simulation_steps)
+            traj_expanded_init = np.tile(traj, (args.sample, 1, 1))  # (B, T, D)
+            # traj_expanded_grid = np.tile(traj, (25, 1, 1))  # (B, T, D)
+            # traj_expanded_all = np.tile(traj, (100, 1, 1))  # (B, T, D)
 
-    # init_lyapunov = cal_lyapunov_exponent(init_dist.T,eps=1e-2)
+            for t in range(individual_trajectories.shape[1]):
+                point = individual_trajectories[:,t,:]
+                # print(individual_trajectories.shape, point.shape)
+                point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
+                # print(traj.shape[1])
+                # print(point_expanded.shape,traj_expanded.shape)
+                dist, _ , _ = riemann_anisotropic_distance(traj_expanded_init, point_expanded)
+                # print(dist.shape)
+                dist_min_idx = np.argmin(dist, axis=1)
+                dist_min = np.linalg.norm(traj_expanded_init[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
+                init_dist[:,t] = torch.from_numpy(dist_min)
+                # print(point,dist_min_idx,dist_min)
+            init_dist = init_dist.T
+            
+            # for t in range(individual_grid_trajectories.shape[1]):
+            #     point = individual_grid_trajectories[:,t,:]
+            #     point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
+            #     dist, _ , _ = riemann_anisotropic_distance(traj_expanded_grid, point_expanded)
+            #     dist_min_idx = np.argmin(dist, axis=1)
+            #     dist_min = np.linalg.norm(traj_expanded_grid[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
+            #     grid_dist[:,t] = torch.from_numpy(dist_min)
+            # grid_dist = grid_dist.T
+            
+            # for t in range(individual_all_trajectories.shape[1]):
+            #     point = individual_all_trajectories[:,t,:]
+            #     point_expanded = np.tile(point[:, None, :], (1, traj.shape[1], 1))
+            #     dist, _ , _ = riemann_anisotropic_distance(traj_expanded_all, point_expanded)
+            #     dist_min_idx = np.argmin(dist, axis=1)
+            #     dist_min = np.linalg.norm(traj_expanded_all[np.arange(dist.shape[0]), dist_min_idx][:,:2] - point[:,:2], axis=1)
+            #     all_dist[:,t] = torch.from_numpy(dist_min)
+            # all_dist = all_dist.T
+            
+            suffix = "_model" if args.use_model.lower() == 'true' else ""
+            init_dist_save_path = params.save_path + f'stats/init_dist_history{suffix}.npy'
+            # grid_dist_save_path = params.save_path + f'stats/grid_dist_history{suffix}.npy'
+            # all_dist_save_path = params.save_path + f'stats/all_dist_history{suffix}.npy'
+            
+            np.save(init_dist_save_path, init_dist.numpy())
+            # np.save(grid_dist_save_path, grid_dist.numpy())
+            # np.save(all_dist_save_path, all_dist.numpy())
+        else:
+            init_dist = None
+            grid_dist = None
+            all_dist = None
+        
+    
+    if params.name in ["PUMA","CONDOR"]:
+        delta_t = 10 / time_scale_factor
+    else:
+        delta_t = params.delta_t
+    
+    if init_dist is not None:
+        init_lyapunov = cal_lyapunov_exponent(init_dist.T,eps=1e-2,delta_t=delta_t)
+    else:
+        init_lyapunov = None
+    
     # grid_lyapunov = cal_lyapunov_exponent(grid_dist.T,eps=1e-2)
-    # all_lyapunov = cal_lyapunov_exponent(all_dist.T,eps=1e-2)
+    # if all_dist is not None:
+    #     all_lyapunov = cal_lyapunov_exponent(all_dist.T,eps=1e-2,delta_t=delta_t)
+    # else:    
+        # all_lyapunov = None
 
     # print("\nLyapunov Exponents:")
     # print(init_dist.shape)
@@ -409,21 +473,21 @@ def main(num = int):
         batch_plot_path_2d_all = params.save_path + 'images/batch_trajectories_2d_all.png'
         if params.space == "euclidean":
             individual_trajectories[:,:,:2] = denormalize_state(individual_trajectories[:,:,:2], x_min, x_max)
-            individual_grid_trajectories[:,:,:2] = denormalize_state(individual_grid_trajectories[:,:,:2], x_min, x_max)
+            # individual_grid_trajectories[:,:,:2] = denormalize_state(individual_grid_trajectories[:,:,:2], x_min, x_max)
             individual_all_trajectories[:,:,:2] = denormalize_state(individual_all_trajectories[:,:,:2], x_min, x_max)
             plot_batch_trajectories_2d(demonstrations_denorm, individual_trajectories, batch_plot_path_2d_init, 
                                     f"Batch State Dynamics Simulation ({args.sample} random starts)\n", init_dist)
-            plot_batch_trajectories_2d(demonstrations_denorm, individual_grid_trajectories, batch_plot_path_2d_grid, 
-                                      f"Batch State Dynamics Simulation ({args.sample} grid starts)\n", grid_dist)
+            # plot_batch_trajectories_2d(demonstrations_denorm, individual_grid_trajectories, batch_plot_path_2d_grid, 
+            #                           f"Batch State Dynamics Simulation ({args.sample} grid starts)\n", grid_dist)
             plot_batch_trajectories_2d(demonstrations_denorm, individual_all_trajectories, batch_plot_path_2d_all, 
                                       f"Batch State Dynamics Simulation ({args.sample} all starts)\n", all_dist)
         elif params.space == "sphere":            
             plot_batch_trajectories_2d_sphere(q_traj, individual_trajectories, batch_plot_path_2d_init, 
                                     f"Batch State Dynamics Simulation ({args.sample} random starts)\n", init_dist)
-            plot_batch_trajectories_2d_sphere(q_traj, individual_grid_trajectories, batch_plot_path_2d_grid, 
-                                      f"Batch State Dynamics Simulation ({args.sample} grid starts)\n", grid_dist)
-            plot_batch_trajectories_2d_sphere(q_traj, individual_all_trajectories, batch_plot_path_2d_all, 
-                                      f"Batch State Dynamics Simulation ({args.sample} all starts)\n", all_dist)
+            # plot_batch_trajectories_2d_sphere(q_traj, individual_grid_trajectories, batch_plot_path_2d_grid, 
+            #                           f"Batch State Dynamics Simulation ({args.sample} grid starts)\n", grid_dist)
+            # plot_batch_trajectories_2d_sphere(q_traj, individual_all_trajectories, batch_plot_path_2d_all, 
+            #                           f"Batch State Dynamics Simulation ({args.sample} all starts)\n", all_dist)
 
     # Batch state evolution plot
     batch_plot_path_evolution = params.save_path + 'images/batch_state_evolution.png'
@@ -467,64 +531,67 @@ def main(num = int):
         print(f"Generated {len(individual_trajectories)} individual random trajectory plots\n")
         
         # Save individual grid trajectories
-        individual_grid_traj_dir = params.save_path + 'stats/individual_grid_trajectories/'
-        if not os.path.exists(individual_grid_traj_dir):
-            os.makedirs(individual_grid_traj_dir)
+        # individual_grid_traj_dir = params.save_path + 'stats/individual_grid_trajectories/'
+        # if not os.path.exists(individual_grid_traj_dir):
+        #     os.makedirs(individual_grid_traj_dir)
         
-        for i, trajectory in enumerate(individual_grid_trajectories):
-            individual_grid_traj_path = individual_grid_traj_dir + f'trajectory_grid_{i+1:03d}.npy'
-            np.save(individual_grid_traj_path, trajectory)
+        # for i, trajectory in enumerate(individual_grid_trajectories):
+        #     individual_grid_traj_path = individual_grid_traj_dir + f'trajectory_grid_{i+1:03d}.npy'
+        #     np.save(individual_grid_traj_path, trajectory)
         
-        print(f"Individual grid trajectories saved to: {individual_grid_traj_dir}")
-        print(f"Saved {len(individual_grid_trajectories)} individual grid trajectory files\n")
+        # print(f"Individual grid trajectories saved to: {individual_grid_traj_dir}")
+        # print(f"Saved {len(individual_grid_trajectories)} individual grid trajectory files\n")
         
-        # Save individual grid trajectory plots
-        individual_grid_plots_dir = params.save_path + 'images/individual_grid_trajectories/'
-        if not os.path.exists(individual_grid_plots_dir):
-            os.makedirs(individual_grid_plots_dir)
+        # # Save individual grid trajectory plots
+        # individual_grid_plots_dir = params.save_path + 'images/individual_grid_trajectories/'
+        # if not os.path.exists(individual_grid_plots_dir):
+        #     os.makedirs(individual_grid_plots_dir)
         
-        for i, trajectory in enumerate(individual_grid_trajectories):
-            plot_path = individual_grid_plots_dir + f'trajectory_grid_{i+1:03d}.png'
-            # Get distance data for this trajectory
-            trajectory_dist = grid_dist[:,i] if i < grid_dist.shape[1] else None
-            if params.space == "euclidean":
-                plot_individual_trajectory_2d(demonstrations_denorm, trajectory, plot_path, i+1, "Random", trajectory_dist)
-            elif params.space == "sphere":
-                plot_individual_trajectory_2d_sphere(q_traj, trajectory, plot_path, i+1, "Random", trajectory_dist)
+        # for i, trajectory in enumerate(individual_grid_trajectories):
+        #     plot_path = individual_grid_plots_dir + f'trajectory_grid_{i+1:03d}.png'
+        #     # Get distance data for this trajectory
+        #     trajectory_dist = grid_dist[:,i] if i < grid_dist.shape[1] else None
+        #     if params.space == "euclidean":
+        #         plot_individual_trajectory_2d(demonstrations_denorm, trajectory, plot_path, i+1, "Random", trajectory_dist)
+        #     elif params.space == "sphere":
+        #         plot_individual_trajectory_2d_sphere(q_traj, trajectory, plot_path, i+1, "Random", trajectory_dist)
 
         
-        print(f"Individual grid trajectory plots saved to: {individual_grid_plots_dir}")
-        print(f"Generated {len(individual_grid_trajectories)} individual grid trajectory plots\n")
+        # print(f"Individual grid trajectory plots saved to: {individual_grid_plots_dir}")
+        # print(f"Generated {len(individual_grid_trajectories)} individual grid trajectory plots\n")
+        
+        
+    
 
 
-        individual_all_traj_dir = params.save_path + 'stats/individual_all_trajectories/'
-        if not os.path.exists(individual_all_traj_dir):
-            os.makedirs(individual_all_traj_dir)
+        # individual_all_traj_dir = params.save_path + 'stats/individual_all_trajectories/'
+        # if not os.path.exists(individual_all_traj_dir):
+        #     os.makedirs(individual_all_traj_dir)
 
-        for i, trajectory in enumerate(individual_all_trajectories):
-            individual_all_traj_path = individual_all_traj_dir + f'trajectory_all_{i+1:03d}.npy'
-            np.save(individual_all_traj_path, trajectory)
+        # for i, trajectory in enumerate(individual_all_trajectories):
+        #     individual_all_traj_path = individual_all_traj_dir + f'trajectory_all_{i+1:03d}.npy'
+        #     np.save(individual_all_traj_path, trajectory)
 
-        print(f"Individual all trajectories saved to: {individual_all_traj_dir}")
-        print(f"Saved {len(individual_all_trajectories)} individual all trajectory files")
+        # print(f"Individual all trajectories saved to: {individual_all_traj_dir}")
+        # print(f"Saved {len(individual_all_trajectories)} individual all trajectory files")
 
-        # Save individual all trajectory plots
-        individual_all_plots_dir = params.save_path + 'images/individual_all_trajectories/'
-        if not os.path.exists(individual_all_plots_dir):
-            os.makedirs(individual_all_plots_dir)
+        # # Save individual all trajectory plots
+        # individual_all_plots_dir = params.save_path + 'images/individual_all_trajectories/'
+        # if not os.path.exists(individual_all_plots_dir):
+        #     os.makedirs(individual_all_plots_dir)
 
-        for i, trajectory in enumerate(individual_all_trajectories):
-            plot_path = individual_all_plots_dir + f'trajectory_all_{i+1:03d}.png'
-            # Get distance data for this trajectory
-            trajectory_dist = all_dist[:,i] if i < all_dist.shape[1] else None
-            if params.space == "euclidean":
-                plot_individual_trajectory_2d(demonstrations_denorm, trajectory, plot_path, i+1, "Random", trajectory_dist)
-            elif params.space == "sphere":
-                plot_individual_trajectory_2d_sphere(q_traj, trajectory, plot_path, i+1, "Random", trajectory_dist)
+        # for i, trajectory in enumerate(individual_all_trajectories):
+        #     plot_path = individual_all_plots_dir + f'trajectory_all_{i+1:03d}.png'
+        #     # Get distance data for this trajectory
+        #     trajectory_dist = all_dist[:,i] if i < all_dist.shape[1] else None
+        #     if params.space == "euclidean":
+        #         plot_individual_trajectory_2d(demonstrations_denorm, trajectory, plot_path, i+1, "Random", trajectory_dist)
+        #     elif params.space == "sphere":
+        #         plot_individual_trajectory_2d_sphere(q_traj, trajectory, plot_path, i+1, "Random", trajectory_dist)
 
 
-        print(f"Individual all trajectory plots saved to: {individual_all_plots_dir}")
-        print(f"Generated {len(individual_all_trajectories)} individual all trajectory plots")
+        # # print(f"Individual all trajectory plots saved to: {individual_all_plots_dir}")
+        # print(f"Generated {len(individual_all_trajectories)} individual all trajectory plots")
 
     # Save random initial states
     initial_states_save_path = params.save_path + 'stats/random_initial_states.npy'
@@ -532,14 +599,14 @@ def main(num = int):
     print(f"Random initial states saved to: {initial_states_save_path}\n")
     
     # Save grid initial states
-    grid_states_save_path = params.save_path + 'stats/grid_initial_states.npy'
-    np.save(grid_states_save_path, grid_initial_states)
-    print(f"Grid initial states saved to: {grid_states_save_path}\n")
+    # grid_states_save_path = params.save_path + 'stats/grid_initial_states.npy'
+    # np.save(grid_states_save_path, grid_initial_states)
+    # print(f"Grid initial states saved to: {grid_states_save_path}\n")
 
     
-    all_states_save_path = params.save_path + 'stats/all_initial_states.npy'
-    np.save(all_states_save_path, all_initial_states)
-    print(f"All initial states saved to: {all_states_save_path}\n")
+    # all_states_save_path = params.save_path + 'stats/all_initial_states.npy'
+    # np.save(all_states_save_path, all_initial_states)
+    # print(f"All initial states saved to: {all_states_save_path}\n")
 
     # Also run single trajectory simulation for comparison (using first random state)
     # print("\nRunning single trajectory simulation for comparison...")
@@ -556,29 +623,71 @@ def main(num = int):
     # plot_state_evolution(single_trajectory, single_plot_path_evolution, params.delta_t)
     
     dtw_results = []
-    for idx , init_traj in enumerate(individual_trajectories):
-        traj_list = []
-        positions = init_traj[:, :2]
-        # print(positions[-5:,:],demonstrations_denorm[0,-5:,:])
-        goal = demonstrations_denorm[0,-1,:2]
-        # positions_denorm = denormalize_state(positions, x_min, x_max)
-        for position in positions:
-            if np.linalg.norm(position-goal) > 10:
-                traj_list.append(position)
-            else:
-                traj_list.append(position)
-                break
-        traj_list = np.array(traj_list).reshape(-1, 2)
-        distance, path = fastdtw(demonstrations_denorm[0], traj_list, dist=2)
-        
-        normalized_distance = distance / len(path)
-        dtw_results.append(normalized_distance)
+    if params.space == "euclidean":
+        for idx , init_traj in enumerate(individual_trajectories):
+            traj_list = []
+            positions = init_traj[:, :2]
+            # print(positions[-5:,:],demonstrations_denorm[0,-5:,:])
+            goal = demonstrations_denorm[0,-1,:2]
+            # positions_denorm = denormalize_state(positions, x_min, x_max)
+            if torch.is_tensor(goal):
+                goal = goal.detach().cpu().numpy()
+            if torch.is_tensor(positions):
+                positions = positions.detach().cpu().numpy()
+            
+            for position in positions:
+                if torch.is_tensor(position):
+                    position = position.detach().cpu().numpy()
+                
+                if np.linalg.norm(position-goal) > 10:
+                    traj_list.append(position)
+                else:
+                    traj_list.append(position)
+                    break
+            traj_list = np.array(traj_list).reshape(-1, 2)
+            distance, path = fastdtw(demonstrations_denorm[0], traj_list, dist=2)
+
+            
+            normalized_distance = distance / len(path)
+            dtw_results.append(normalized_distance)
+    elif params.space == "sphere":
+        for idx , init_traj in enumerate(individual_trajectories):
+            # print(init_traj.shape, q_traj.shape)
+            traj_list = []
+            positions_q = init_traj[:,:2]
+            positions = q_to_x(torch.from_numpy(positions_q))
+            # print(x_traj.shape,q_traj.shape)/
+            goal = x_traj[-1,:3]
+            if torch.is_tensor(goal):
+                goal = goal.detach().cpu().numpy()
+            if torch.is_tensor(positions):
+                positions = positions.detach().cpu().numpy()
+            
+            for position in positions:
+                if torch.is_tensor(position):
+                    position = position.detach().cpu().numpy()
+                
+                if np.linalg.norm(position-goal) > 1:
+                    traj_list.append(position)
+                else:
+                    traj_list.append(position)
+                    break
+            traj_list = np.array(traj_list).reshape(-1, 3)
+            from scipy.spatial.distance import cosine
+            # print(x_traj[0].numpy().shape,traj_list.shape)
+            distance, path = fastdtw(x_traj.numpy(), traj_list, dist=cosine)
+            
+            normalized_distance = distance / len(path)
+            dtw_results.append(normalized_distance)
         
     dtw_results = np.array(dtw_results)
     mean_dtw = np.mean(dtw_results)
     std_dtw = np.std(dtw_results)
-    threshold_dtw = min(max(mean_dtw + 2 * std_dtw , mean_dtw + 10.0),8) # trajectories with DTW > mean + 2*std
-    
+    if params.space == "euclidean":
+        threshold_dtw = min(max(mean_dtw + 2 * std_dtw , mean_dtw + 10.0),20) # trajectories with DTW > mean + 2*std
+    elif params.space == "sphere":
+        threshold_dtw = min(max(mean_dtw + 2 * std_dtw , mean_dtw + 0.1),0.3) # trajectories with DTW > mean + 2*std
+        
     print(f"\nDTW Analysis:")
     print(f"  Mean DTW: {mean_dtw:.4f}")
     print(f"  Std DTW: {std_dtw:.4f}")
@@ -599,9 +708,17 @@ def main(num = int):
         f.write(f"High DTW trajectories: {len(high_dtw_indices)}/{len(dtw_results)}\n")
         f.write(f"High DTW trajectory indices (1-based): {high_dtw_indices + 1}\n")
         f.write(f"Their DTW values: {dtw_results[high_dtw_indices]}\n")
-        
-        for idx, dtw_value in enumerate(dtw_results):
-            f.write(f"Trajectory {idx + 1}: DTW = {dtw_value:.4f}\n")
+        # if all_lyapunov is not None:
+        #     arr = all_lyapunov.cpu().numpy()
+        #     mean_val = np.nanmean(arr)
+        #     std_val = np.nanstd(arr)
+            # print(arr)
+
+            # f.write(f"Random sample Lyapunov exponents: {mean_val:.4f} +- {std_val:.4f}\n")
+        if init_lyapunov is not None:    
+            for idx, dtw_value in enumerate(dtw_results):
+                f.write(f"Trajectory {idx + 1}: DTW = {dtw_value:.4f} Lyapunov = {init_lyapunov[idx]:.4f}\n")
+            
 
     print("\n=== Simulation completed successfully! ===")
     print(f"Results saved in: {params.save_path}")
@@ -614,4 +731,5 @@ def main(num = int):
 
 if __name__ == "__main__":
     for i in range(11):
+    # i = 8
         main(i)

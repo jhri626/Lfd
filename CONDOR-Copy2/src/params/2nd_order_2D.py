@@ -5,19 +5,21 @@ from dataclasses import dataclass
 class Params:
     """ General parameters """
     dataset_name: str = 'LAIR_single'  # options: LASA, LAIR, optitrack, interpolation, joint_space
-    results_path: str = '../../submodule/CONDOR/src/results/2nd_order_2D/single/'  # path to save results
+    results_path: str = '../../submodule/PUMA/src/results/2nd_order_2D/single/'  # path to save results
     multi_motion: bool = False  # true when learning multiple motions together
-    selected_primitives_ids: str = '5'  # id number from dataset_keys.py, e.g., '2' or '4,0,6'
+    selected_primitives_ids: str = '0'  # id number from dataset_keys.py, e.g., '2' or '4,0,6'
     workspace_dimensions: int = 2  # dimensionality of the data
     saturate_out_of_boundaries_transitions: bool = True  # True to enforce positively invariant set
     dynamical_system_order: int = 2  # options: 1, 2
-    delta_t = 0.005
-    # delta_t = 1 # for baseline
+    # delta_t = 0.005
+    delta_t = 0.05
+    delta_t = 1 # for baseline
     eta = 2
-    name = 'CONDOR'  # name of the method, used for saving results
-    encoder_only_epochs: int = 5000  # epoch to freeze encoder, 0 means no freezing
-    space = "euclidean"  # options: euclidean, sphere
-    individual_save: bool = False  # true to save individual results in multi-motion learning
+    name = 'PUMAs'  # name of the method, used for saving results
+    space = "sphere"  # options: euclidean, sphere
+    individual_save: bool = True  # true to save individual results in multi-motion learning
+    dist = True
+    multi = False
 
     """ Latent Dynamical System parameters """
     adaptive_gains: bool = True  # adaptive gains if true
@@ -52,7 +54,7 @@ class Params:
     spline_sample_type: str = 'evenly spaced'  # resample from spline type, options: from data, from data resample, evenly spaced
     workspace_boundaries_type: str = 'from data'  # options: from data, custom
     workspace_boundaries: str = 'not used'  # list to provide boundaries when workspace_boundaries_type = custom
-    trajectories_resample_length: int = 2000  # amount of points resampled from splines when type spline_sample_type is 'from data resample' or 'evenly spaced'
+    trajectories_resample_length: int = 1000  # amount of points resampled from splines when type spline_sample_type is 'from data resample' or 'evenly spaced'
     state_increment: float = 0.3  # when workspace_boundaries_type = from data, percentage to increment state-space size
 
     """ Evaluation """

@@ -12,7 +12,6 @@ from agent.utils.S2_functions import *
 def _to_numpy(a):
     """Convert torch.Tensor or list to numpy array."""
     try:
-        import torch
         if isinstance(a, torch.Tensor):
             return a.detach().cpu().numpy()
     except ImportError:
@@ -87,6 +86,17 @@ def generate_random_initial_states(num_states, params, demonstrations, mode='ini
             radius = u ** (1.0 / dim)
             # Generate random offset within the sampling radius
             random_position = start_point + radius * direction
+            dist = np.linalg.norm(random_position - demonstrations,axis=2)
+            if np.any(dist < 1e-2):
+                # print(f"Sampled point too close to demonstration, resampling...")
+                while np.any(dist < 1e-2):
+                    direction = np.random.normal(0, 1, size=dim)
+                    direction /= np.linalg.norm(direction)
+                    u = np.random.uniform(r_min**dim, r_max**dim)
+                    radius = u ** (1.0 / dim)
+                    random_position = start_point + radius * direction
+                    dist = np.linalg.norm(random_position - demonstrations,axis=2)
+                # print(f"Resampled point: {random_position}")
             random_positions.append(random_position)
         
         random_positions = np.array(random_positions)
@@ -106,14 +116,9 @@ def generate_random_initial_states(num_states, params, demonstrations, mode='ini
             grid_y = yy.flatten()
             random_positions = np.column_stack([grid_x, grid_y])
             
-            print(f"Generated 25 grid points (using first {min(num_states, 25)} points)")
-            # If num_states < 25, use only the first num_states points
-            # If num_states > 25, repeat the pattern or use only 25
-            if num_states <= 25:
-                random_positions = random_positions[:num_states]
-            else:
-                print(f"Warning: num_states ({num_states}) > 25, using only 25 grid points")
-                random_positions = random_positions[:25]
+            print(f"Generated 25 grid points (fixed to 25 regardless of num_states={num_states})")
+            # Always use all 25 grid points regardless of num_states
+            # random_positions already contains 25 points
                 
         else:
             raise ValueError(f"Grid mode currently only supports 2D workspace, got {params.workspace_dimensions}D")
@@ -150,6 +155,23 @@ def generate_random_initial_states(num_states, params, demonstrations, mode='ini
             
             # Add noise to selected point
             noisy_position = selected_point + gaussian_noise
+            dist = np.linalg.norm(noisy_position - demonstrations,axis=2)
+            # if i == 86 or i == 87 or i == 88 or i == 89 or i == 90:
+            #     print(np.min(dist))
+            #     print(noisy_position.shape,demonstrations.shape)
+            if np.any(dist < 5e-2):
+                # print(f"Sampled point too close to demonstration, resampling...")
+                while np.any(dist < 5e-2):
+                    random_idx = np.random.randint(0, len(all_positions))
+                    selected_point = all_positions[random_idx].copy()
+                    gaussian_noise = np.random.normal(
+                        loc=0.0,
+                        scale=sampling_std,
+                        size=params.workspace_dimensions
+                    )
+                    noisy_position = selected_point + gaussian_noise
+                    dist = np.linalg.norm(noisy_position - demonstrations,axis=2)
+                # print(f"Resampled point: {noisy_position}")
             random_positions.append(noisy_position)
         
         random_positions = np.array(random_positions)
@@ -709,5 +731,27 @@ def lpf_then_rematch_q(q_traj, fs, fc, numtaps=101, refine_mean=True):
     # Convert back to q if needed
     q_filt_matched = x_to_q(X_filt_matched)
     q_filt_matched = q_filt_matched.unsqueeze(0).float()
+    
+    
+    
+    x_ = X_filt_matched[:-1,:]
+    x_tplus = X_filt_matched[1:,:]
+    
+    
+    
+    d_ = 1 - torch.clamp(torch.sum(x_ * x_tplus, dim=1), -1.0, 1.0)
+
+    idx = torch.where(d_ < 1e-12)[0]
+
+    
+    mask = torch.ones(X_filt_matched.shape[0], dtype=torch.bool)
+
+    mask[idx] = False
+    X_filt_matched = X_filt_matched[mask]
+    q_final = q_filt_matched[0][mask]
+    q_filt_matched = q_final.unsqueeze(0)
+    
+
+    
 
     return q_filt_matched, X_filt_matched

@@ -1,6 +1,7 @@
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
+from matplotlib.ticker import MultipleLocator
 import matplotlib.colors as mcolors
 import numpy as np
 
@@ -89,12 +90,18 @@ def plot_batch_trajectories_2d(demonstrations, batch_trajectories, save_path, ti
                 # Mark end points
                 ax.plot(trajectory[-1, 0], trajectory[-1, 1], 's', color=color, 
                        markersize=8, markerfacecolor=color, alpha=0.8)
-    
-    ax.set_xlabel('X Position')
-    ax.set_ylabel('Y Position')
-    ax.set_title(title)
+
+    # ax.set_xlabel('X (px)', fontsize=14)
+    # ax.set_ylabel('Y (px)', fontsize=14)
+    # ax.set_title(title)
     # ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_locator(MultipleLocator(100))   
+    ax.yaxis.set_major_locator(MultipleLocator(100)) 
+    ax.tick_params(axis='both', labelsize=24)
+
+    # 축 숫자 크게
+    # ax.tick_params(axis='both', labelsize=14)
     # ax.set_aspect('equal')
     
     # Save plot
@@ -557,9 +564,9 @@ def plot_batch_trajectories_2d_sphere(
 
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection="3d")
-    ax.grid(linestyle="--", alpha=0.2)
+    # ax.grid(linestyle="--", alpha=0.2)
     plt.rcParams.update({"font.size": 12})
-    ax.set_title(title)
+    ax.set_title("    ")
 
     # Draw opaque sphere using your existing function
     surf, wire = _draw_sphere(
@@ -576,8 +583,9 @@ def plot_batch_trajectories_2d_sphere(
 
     # 2D overlay for trajectories
     plt.tight_layout()
-    fig.canvas.draw()  # ensure ax position is finalized
-    overlay = fig.add_axes(ax.get_position(), frameon=False)
+    fig.canvas.draw()
+    pos = ax.get_position()
+    overlay = fig.add_axes(pos, frameon=False)
     overlay.set_axis_off()
     overlay.set_xlim(0, 1)
     overlay.set_ylim(0, 1)
@@ -596,7 +604,7 @@ def plot_batch_trajectories_2d_sphere(
         xyz_demo *= float(traj_lift)
         P_demo = _project_xyz_to_fig_coords(xyz_demo, ax, fig)
         overlay.plot(P_demo[:, 0], P_demo[:, 1],
-                     color="red", linewidth=2.5, zorder=10000)
+                     color="gray", linewidth=4, zorder=10000, alpha=0.3)
         overlay.scatter(P_demo[-1, 0], P_demo[-1, 1],
                         color="red", marker="*", s=60, zorder=10000)
 

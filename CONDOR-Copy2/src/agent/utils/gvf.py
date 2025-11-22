@@ -1,5 +1,7 @@
 from agent.utils.distance import riemann_anisotropic_distance_S2
 from agent.utils.S2_functions import *
+import time
+
 
 def cvf_sphere_2nd_order(xsample, eta, xtraj, xdottraj, dist_radius):
     
@@ -19,11 +21,13 @@ def cvf_sphere_2nd_order(xsample, eta, xtraj, xdottraj, dist_radius):
     xtraj = q_to_x(xtraj)
     xdottraj = qdot_to_xdot(xdottraj, xtraj)
     
+    # time_pos = time.time()
     # verterized distance
     distance_pos = get_distance_sphere(xsample_pos, xtraj, index=False)
     distance_pos = torch.ones_like(distance_pos) - distance_pos
     
-    
+    # print("Distance Computation Time:", time.time() - time_pos)
+    # time_metric = time.time()
     top_n_argmin = []
     for b in range(B):
         idx = torch.nonzero(distance_pos[b] < dist_radius[b], as_tuple=False).squeeze(1)
@@ -98,11 +102,13 @@ def cvf_sphere_2nd_order(xsample, eta, xtraj, xdottraj, dist_radius):
     xtraj_closest = xtraj[index_closest]
     xdottraj_closest = xdottraj[index_closest]
     
+    # print("Metric Computation Time:", time.time() - time_metric)
+    time_gvf = time.time()
     if eta < 1e30:
         V1 = parallel_transport(xtraj_closest, xsample_pos, xdottraj_closest)
     if eta > 0:
         vel = vel_geo_0_sphere(xsample_pos, xtraj_closest)
-    
+    # print("GVF Computation Time:", time.time() - time_gvf)
     if eta == 0: 
         return V1
     if eta > 1e30:
@@ -118,5 +124,15 @@ def cvf_sphere_2nd_order(xsample, eta, xtraj, xdottraj, dist_radius):
     
     # if check:
     #     print(batch_list)
+    # epsilon = 1e-7
+    # v = V1 + eta * vel
+    # print(v[0], V1[0], eta[0] * vel[0])
+    
+    # indices = torch.where(torch.abs(v) < epsilon)[0]
 
+    # for idx in indices.tolist():
+    #     print(f"Index: {idx}, Value: {v[idx].tolist()}")  # convert whole row to Python list
+
+
+    
     return V1 + eta * vel, dist , check, batch_list[0] if batch_list else None

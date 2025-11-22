@@ -7,3 +7,9 @@
 [submodule "submodule/CONDOR"]
 	path = submodule/CONDOR
 	url = https://github.com/rperezdattari/Stable-Motion-Primitives-via-Imitation-and-Contrastive-Learning.git
+[submodule "submodule/euclidean_flow"]
+	path = submodule/euclidean_flow
+	url = https://github.com/mrana6/euclideanizing_flows.git
+[submodule "submodule/seds"]
+	path = submodule/seds
+	url = https://bitbucket.org/khansari/seds.git

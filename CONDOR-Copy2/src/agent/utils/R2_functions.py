@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import ListedColormap
-from .distance import sasaki_R2 ,riemann_anisotropic_distance
+from .distance import riemann_anisotropic_distance
 from .dynamical_system_operations import denormalize_state
 
 def Uniform_sampling_R2(xtraj, batch_size, xlim=None, ylim=None):
@@ -211,6 +211,7 @@ def gvf_R2_np(xsample, eta, xtraj, xdottraj, metric, dist_radius):
     else:
         # print(V1[0],vel[0])
         # print((V1 + eta * vel)[0])
+        # print(V1,vel,sample_state)
         return V1 + eta * vel , dist # Return both the vector field and the distance norm
 
 def streamline_plot_R2(xtraj, xdottraj=None, eta=5, grid_step = 101, a_max=50, ax=None, figsize=(10,10), self=None):

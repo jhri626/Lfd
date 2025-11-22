@@ -40,6 +40,7 @@ class DataPreprocessor:
 
         # Get min/max derivatives of training demonstrations
         limits_derivatives = self.get_limits_derivatives(demonstrations_train)
+        
 
         # Create preprocess output dictionary
         preprocess_output = {'demonstrations train': demonstrations_train}
@@ -274,14 +275,12 @@ class DataPreprocessor:
         """
         # Get velocities from normalized resampled demonstrations
         velocity = (demos[:, :, :, 1:] - demos[:, :, :, :-1]) / self.delta_t
-
         # Get accelerations from velocities
         acceleration = (velocity[:, :, :, 1:] - velocity[:, :, :, :-1]) / self.delta_t
 
         # Compute max velocities
         min_velocity = np.min(velocity, axis=(0, 1, 3))
         max_velocity = np.max(velocity, axis=(0, 1, 3))
-
         # Compute max acceleration
         if self.dynamical_system_order == 1:
             min_acceleration = None  # acceleration not used in first-order systems
@@ -298,6 +297,7 @@ class DataPreprocessor:
             min_velocity_state = min_velocity - (max_velocity - min_velocity) * self.state_increment / 2
             max_velocity = max_velocity_state
             min_velocity = min_velocity_state
+            
 
         # Collect
         limits = {'vel min train': min_velocity,

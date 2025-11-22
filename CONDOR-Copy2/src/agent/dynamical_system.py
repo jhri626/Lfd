@@ -29,20 +29,28 @@ class DynamicalSystem():
         self.x_min = np.array(x_min)
         self.x_max = np.array(x_max)
         self.batch_size = x_init.shape[0]
+        self.check = True
         
         # print("dynamics time" , self.delta_t)
         # Init dynamical system state
         self.x_t_d = x_init
         self.y_t = {'task': None, 'latent': None}
         self.y_t_d = self.get_latent_state(x_init)
-        
+        # print(x_init[0])
     def get_latent_state(self, x_t=None, y_traj=None ,space='task'):
         """
         Obtains current latent state by either mapping task state or from previous latent system transition
         """
         if space == 'task':
             # Map state to latent state (psi)
+                
             y_t = self.model.encoder(x_t,self.primitive_type)
+            # if self.check == True:
+            #     print("From task space to latent space:")
+            #     print(self.model.encoder1.weight[:5, :5]) 
+            #     print(y_t[0,:5])
+            #     print(x_t[0])
+                
             self.y_t['task'] = y_t
         elif space == 'latent':
             # Transition following f^{L}
@@ -132,6 +140,7 @@ class DynamicalSystem():
         
         # Normalize velocity to have a state space between -1 and 1
         vel_t_d_norm = normalize_state(vel_t_d, self.min_vel, self.max_vel)
+        # print(vel_t_d_norm)
 
         # Create desired state
         x_t_d = torch.cat([pos_t_d, vel_t_d_norm], dim=1)
@@ -151,12 +160,17 @@ class DynamicalSystem():
 
         # Map latent state to task state derivative (vel/acc) (phi)
         dx_t_d = self.map_to_velocity(y_t)
+        # if self.check == True:
+        #     print(y_t[0,:5])
+        #     print(dx_t_d[0])
+        #     self.check = False
 
         # Saturate (to keep state inside boundary) and integrate derivative
         if self.order == 1:
             self.x_t_d, vel_t_d = self.integrate_1st_order(x_t, dx_t_d)
         elif self.order == 2:
             self.x_t_d, vel_t_d = self.integrate_2nd_order(x_t, dx_t_d)
+            
         else:
             raise ValueError('Selected dynamical system order not valid, options: 1, 2.')
 

@@ -25,3 +25,5 @@ config.yaml
 *.png
 *.txt
 *.npy
+*.log
+data/

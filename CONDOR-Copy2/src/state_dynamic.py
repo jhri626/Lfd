@@ -117,6 +117,7 @@ class StateDynamic:
                 # print("state",state)
     
                 velocities, dist, check, idx = cvf_sphere_2nd_order(state, self.eta , xtraj, xdottraj, self.dist)  # Goal-directed dynamics
+                # quit()
                 # print(dist.shape)
                 if self.current_step < self.max_steps:
                     self.dist_history[self.current_step] = dist
@@ -128,6 +129,7 @@ class StateDynamic:
                 # print("velocities",velocities,positions)
                 
                 next_positions = exp_sphere(positions, self.delta_t * velocities)
+                # print(next_positions[0], positions[0], self.delta_t * velocities[0])
                 
                 # print(next_positions.shape)
                 # print("next_positions",next_positions)

@@ -1,6 +1,9 @@
 import numpy as np
 import torch
 from agent.utils.S2_functions import parallel_transport
+# from agent.utils.SE3_functions import invSE3, largeAdjoint, logSO3, Tdot_to_Vb, screw_bracket
+# from utils.SE3_functions import invSE3, largeAdjoint, logSO3, Tdot_to_Vb, screw_bracket
+import time
 
 
 def angle_between(u, v, degrees=False):
@@ -27,95 +30,6 @@ def angle_between(u, v, degrees=False):
 
     # Expand to (B, T, 1)
     return angle
-
-
-
-
-import numpy as np
-
-def sasaki_R2(seq1, seq2, lambda_horiz=1.0, lambda_vert=1e-1,
-              alpha_dir=10.0, beta_mag=1.0, eps=1e-12):
-    """
-    Compute a direction-sensitive distance between two batches of 2D position-velocity sequences.
-
-    Parameters
-    ----------
-    seq1, seq2 : array-like, shape (B, T, 4)
-        Two batches of sequences. Each time step holds [x, y, vx, vy].
-    lambda_horiz : float
-        Weight for position (horizontal) differences. Multiplies ||?x||^2.
-    lambda_vert : float
-        Overall weight for the velocity (vertical) distance term (for backward compatibility).
-        Multiplies the combined velocity distance: beta_mag*||?v||^2 + alpha_dir*(1 - cos?).
-    alpha_dir : float
-        Direction-mismatch weight ? in the velocity distance.
-    beta_mag : float
-        Magnitude-difference weight ? in the velocity distance.
-    eps : float
-        Small constant for numerical stability (e.g., when velocity norms are near zero).
-
-    Returns
-    -------
-    distances : ndarray, shape (B, T)
-        Per-time-step distance values for each pair of sequences.
-        (If you prefer a single value per sequence, apply a reduction like sum/mean along axis=1.)
-    """
-
-    # Basic checks
-    seq1 = np.asarray(seq1)
-    seq2 = np.asarray(seq2)
-    B, T, D = seq1.shape
-    # print(seq1.shape, seq2.shape)
-    # assert seq2.shape == (B, T, D), "Both sequences must have the same shape (B, T, 4)."
-    # assert D == 4, "Input must have 4 channels per time step: [x, y, vx, vy]."
-
-    # 1) Split positions and velocities
-    pos1 = seq1[:, :, :2]   # (B, T, 2)
-    pos2 = seq2[:, :, :2]   # (B, T, 2)
-    vel1 = seq1[:, :, 2:]   # (B, T, 2)
-    vel2 = seq2[:, :, 2:]   # (B, T, 2)
-
-    # 2) Position distance: squared Euclidean per time step
-    dpos = pos1 - pos2                      # (B, T, 2)
-    pos_dist = np.sum(dpos**2, axis=2)      # (B, T)
-
-    # 3) Velocity distance:
-    #    beta_mag * ||v - w||^2 + alpha_dir * (1 - cos(theta))
-    dv = vel1 - vel2
-    diff_mag2 = np.sum(dv**2, axis=2)       # (B, T)
-
-    # Cosine similarity with safe handling for zero vectors
-    dot = np.sum(vel1 * vel2, axis=2)                       # (B, T)
-    n1 = np.linalg.norm(vel1, axis=2)                       # (B, T)
-    n2 = np.linalg.norm(vel2, axis=2)                       # (B, T)
-    denom = np.maximum(n1 * n2, eps)                        # avoid division by zero
-    cos_sim = dot / denom                                   # (B, T)
-
-    # Handle undefined directions explicitly:
-    both_zero = (n1 < eps) & (n2 < eps)                     # both velocities ~ zero
-    one_zero  = ((n1 < eps) ^ (n2 < eps))                   # exactly one is ~ zero
-
-    # Default cosine dissimilarity
-    cos_dissim = 1.0 - cos_sim
-
-    # If both are zero, direction mismatch is 0 and magnitude diff is 0
-    cos_dissim[both_zero] = 0.0
-    diff_mag2[both_zero]  = 0.0
-
-    # If exactly one is zero, treat direction as maximally mismatched (penalty = 1)
-    cos_dissim[one_zero] = 1.0
-    # diff_mag2 remains as computed (equals the nonzero norm squared)
-
-    vel_dist = beta_mag * diff_mag2 + alpha_dir * cos_dissim  # (B, T)
-
-    # 4) Combine position and velocity parts
-    distances = lambda_horiz * pos_dist + lambda_vert * vel_dist  # (B, T)
-
-    return distances , pos_dist, vel_dist
-
-
-
-
 
 def _build_A(v_ref, beta_mag=1.0, alpha_dir=10.0, sigma=0.5, eps=1e-12, tau=1e-6):
     """
@@ -186,10 +100,10 @@ def _build_A(v_ref, beta_mag=1.0, alpha_dir=10.0, sigma=0.5, eps=1e-12, tau=1e-6
 
 def riemann_anisotropic_distance(seq1, seq2,
                                  lambda_horiz=1.0,
-                                 lambda_vert=0.1,
-                                 alpha_dir=10.0,
+                                 lambda_vert=0.1,   # default 1e-1
+                                 alpha_dir=1.0, # default 10.0
                                  beta_mag=1.0,
-                                 sigma=0.5,
+                                 sigma=0.001,
                                  eps=1e-12,
                                  tau=1e-6,
                                  v_ref_mode="mean"):
@@ -259,15 +173,18 @@ def riemann_anisotropic_distance(seq1, seq2,
         raise ValueError("v_ref_mode must be one of {'mean','seq1','seq2'}")
 
     # Build A(v_ref) for each (B, T)
+    # time_metric = time.time()
     A = _build_A(v_ref, beta_mag=beta_mag, alpha_dir=alpha_dir,
                  sigma=sigma, eps=eps, tau=tau)  # (B, T, 2, 2)
-
+    # print("Metric Construction Time:", time.time() - time_metric)
+    # time_dist = time.time()
     # Quadratic form: vel_dist[i,t] = dv[i,t]^T A[i,t] dv[i,t]
     dv_col = dv[..., None]                 # (B, T, 2, 1)
     tmp = np.matmul(A, dv_col)             # (B, T, 2, 1)
     vel_dist = np.matmul(dv_col.transpose(0,1,3,2), tmp)[..., 0, 0]  # (B, T)
 
     distances = lambda_horiz * pos_dist + lambda_vert * vel_dist
+    # print("Distance Computation Time:", time.time() - time_dist)
     return distances, pos_dist, vel_dist
 
 
@@ -359,14 +276,13 @@ def _build_A_tangent3_torch(
 def riemann_anisotropic_distance_S2(
     seq1: torch.Tensor,
     seq2: torch.Tensor,
-    *,
     lambda_horiz: float = 1.0,
-    lambda_vert: float = 1e-2,  #5e-3
-    alpha_dir: float = 10.0,
+    lambda_vert: float = 1e-1,  #5e-3
+    alpha_dir: float = 1.0,
     beta_mag: float = 1.0,
-    sigma: float = 0.5,
+    sigma: float = 0.001,
     eps: float = 1e-12,
-    tau: float = 1e-6,
+    tau: float = 1e-12,
     v_ref_mode: str = "mean",   # {"mean","seq1","seq2"}
     anchor: str = "seq2",       # {"seq1","seq2"}
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -400,7 +316,7 @@ def riemann_anisotropic_distance_S2(
     # position term: theta^2
     theta = _geodesic_angle(x1, x2)                           # (B,T)
     pos_dist = theta ** 2
-
+    # time_transport = time.time()
     # choose anchor tangent space and parallel-transport the other side
     if anchor == "seq1":
         xA = x1
@@ -417,6 +333,9 @@ def riemann_anisotropic_distance_S2(
         v2_at_A = v2
     else:
         raise ValueError("anchor must be 'seq1' or 'seq2'")
+
+    # print("Parallel Transport Time:", time.time() - time_transport)
+    # time_metric = time.time()
 
     # choose reference velocity for anisotropic weighting
     if v_ref_mode == "mean":
@@ -435,12 +354,270 @@ def riemann_anisotropic_distance_S2(
     A = _build_A_tangent3_torch(
         v_ref, xA, beta_mag=beta_mag, alpha_dir=alpha_dir, sigma=sigma, eps=eps, tau=tau
     )                                                         # (B,T,3,3)
+    # print("Metric Construction Time:", time.time() - time_metric)
 
     # quadratic form: dv^T A dv
+    time_dist = time.time()
     dv_col = dv.unsqueeze(-1)                                 # (B,T,3,1)
     tmp = torch.matmul(A, dv_col)                             # (B,T,3,1)
     vel_dist = torch.matmul(dv_col.transpose(-2, -1), tmp)[..., 0, 0]  # (B,T)
     
 
     distances = lambda_horiz * pos_dist + lambda_vert * vel_dist
+    # print("Distance Computation Time:", time.time() - time_dist)
     return distances, pos_dist, vel_dist
+    
+
+
+
+
+# ---------- anisotropic SPD on se(3) (6x6) ----------
+import torch
+
+def _build_A_se3(
+    xi_ref: torch.Tensor,
+    *,
+    # rotational block hyper-parameters
+    beta_rot: float = 1.0,
+    alpha_rot: float = 10.0,
+    sigma_rot: float = 0.5,
+    enable_rot_aniso: bool = True,
+    # translational block hyper-parameters
+    beta_trans: float = 1.0,
+    alpha_trans: float = 10.0,
+    sigma_trans: float = 0.5,
+    enable_trans_aniso: bool = True,
+    # numerics
+    eps: float = 1e-12,
+    tau: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Build a 6x6 SPD matrix A for se(3) twist xi = [w(3), v(3)].
+
+    Design:
+      A = diag(A_rot(omega_ref), A_trans(v_ref)),  no cross-coupling blocks.
+      Each 3x3 block is either isotropic beta*I or anisotropic
+      with parallel/perpendicular weights relative to the reference direction.
+
+    Args:
+        xi_ref: (..., 6) reference twist = [omega_ref(3), v_ref(3)]
+        beta_rot: baseline weight for rotational magnitude
+        alpha_rot: extra penalty for rotational components perpendicular to omega_ref
+        sigma_rot: smoothing scale near ||omega_ref|| ~ 0 for rotational block
+        enable_rot_aniso: enable anisotropy on rotational block
+        beta_trans: baseline weight for translational magnitude
+        alpha_trans: extra penalty for translational components perpendicular to v_ref
+        sigma_trans: smoothing scale near ||v_ref|| ~ 0 for translational block
+        enable_trans_aniso: enable anisotropy on translational block
+        eps, tau: numerical stabilizers
+
+    Returns:
+        A: (..., 6, 6) SPD matrix
+    """
+    device, dtype = xi_ref.device, xi_ref.dtype
+    *lead, _ = xi_ref.shape
+    A = torch.zeros(*lead, 6, 6, device=device, dtype=dtype)
+
+    # split reference twist
+    w_ref = xi_ref[..., :3]   # (...,3)
+    v_ref = xi_ref[..., 3:]   # (...,3)
+
+    # ---- rotational block ----
+    I3r = torch.eye(3, device=device, dtype=dtype)
+    A_rot = I3r * beta_rot
+
+    if enable_rot_aniso:
+        s = torch.linalg.norm(w_ref, dim=-1, keepdim=True)             # (...,1)
+        small = (s[..., 0] < tau)
+        if (~small).any():
+            idx = ~small
+            w_sel = w_ref[idx]
+            s_sel = torch.linalg.norm(w_sel, dim=-1, keepdim=True)     # (N,1)
+            u = w_sel / (s_sel + eps)                                  # (N,3)
+            P_par  = u.unsqueeze(-1) @ u.unsqueeze(-2)                 # (N,3,3)
+            I3     = torch.eye(3, device=device, dtype=dtype).expand_as(P_par)
+            P_perp = I3 - P_par
+            s2 = (s_sel.squeeze(-1) ** 2)                              # (N,)
+            # same small-angle shape as in your S^2/R^2 code
+            extra_perp = (alpha_rot / 2.0) * (s2 / (s2 + sigma_rot**2)**2)  # (N,)
+            a_par  = beta_rot
+            a_perp = beta_rot + extra_perp.unsqueeze(-1).unsqueeze(-1)      # (N,1,1)
+            A_rot_sel = a_par * P_par + a_perp * P_perp                      # (N,3,3)
+
+            # scatter into A_rot per batch/time index
+            # Start with isotropic, then write anisotropic at idx
+            # We build a full tensor for A_rot to ease assignment
+            A_rot_full = A_rot.expand(*lead, 3, 3).clone()
+            A_rot_full[idx] = A_rot_sel
+            A[..., 0:3, 0:3] = A_rot_full
+        else:
+            A[..., 0:3, 0:3] = A_rot
+    else:
+        A[..., 0:3, 0:3] = A_rot
+
+    # ---- translational block ----
+    I3t = torch.eye(3, device=device, dtype=dtype)
+    A_trans = I3t * beta_trans
+
+    if enable_trans_aniso:
+        s = torch.linalg.norm(v_ref, dim=-1, keepdim=True)             # (...,1)
+        small = (s[..., 0] < tau)
+        if (~small).any():
+            idx = ~small
+            v_sel = v_ref[idx]
+            s_sel = torch.linalg.norm(v_sel, dim=-1, keepdim=True)     # (N,1)
+            u = v_sel / (s_sel + eps)                                  # (N,3)
+            P_par  = u.unsqueeze(-1) @ u.unsqueeze(-2)                 # (N,3,3)
+            I3     = torch.eye(3, device=device, dtype=dtype).expand_as(P_par)
+            P_perp = I3 - P_par
+            s2 = (s_sel.squeeze(-1) ** 2)                              # (N,)
+            extra_perp = (alpha_trans / 2.0) * (s2 / (s2 + sigma_trans**2)**2)  # (N,)
+            a_par  = beta_trans
+            a_perp = beta_trans + extra_perp.unsqueeze(-1).unsqueeze(-1)
+            A_trans_sel = a_par * P_par + a_perp * P_perp              # (N,3,3)
+
+            A_trans_full = A_trans.expand(*lead, 3, 3).clone()
+            A_trans_full[idx] = A_trans_sel
+            A[..., 3:6, 3:6] = A_trans_full
+        else:
+            A[..., 3:6, 3:6] = A_trans
+    else:
+        A[..., 3:6, 3:6] = A_trans
+
+    # cross-coupling blocks (rot-trans) are kept zero for simplicity and SPD
+    # If you later need coupling, ensure symmetry and SPD (e.g., via Schur complement).
+
+    return A
+
+
+
+# ---------- parallel transport (left-invariant) ----------
+def parallel_transport_twist_SE3(xi2: torch.Tensor,
+                                 T1: torch.Tensor,
+                                 T2: torch.Tensor) -> torch.Tensor:
+    """
+    Parallel transport twist xi2 ∈ T_{T2}SE(3) to T_{T1}SE(3)
+    using left-invariant metric: PT = Ad_{T1^{-1} T2} xi2.
+
+    xi2 : (B, T, 6)
+    T1  : (B, T, 4, 4)
+    T2  : (B, T, 4, 4)
+    returns: (B, T, 6)
+    """
+    # relative transform T_rel = T1^{-1} T2
+    T1_inv = invSE3(T1.reshape(-1,4,4)).reshape(*T1.shape)
+    T_rel  = torch.matmul(T1_inv, T2)  # (B,T,4,4)
+    
+    if torch.any(torch.isnan(T_rel)):
+        raise ValueError("T_rel contains NaNs")
+
+    # Ad_{T_rel} ∈ R^{6x6}
+    Ad = largeAdjoint(T_rel.reshape(-1,4,4)).reshape(*T_rel.shape[:-2], 6, 6)  # (B,T,6,6)
+
+    xi2_col = xi2.unsqueeze(-1)                        # (B,T,6,1)
+    xi2_at_T1 = torch.matmul(Ad, xi2_col)[..., 0]      # (B,T,6)
+    return xi2_at_T1
+
+
+# ---------- pose distance on SE(3) ----------
+def _pose_distance_SE3(T1: torch.Tensor, T2: torch.Tensor,
+                       lambda_rot: float = 1.0,
+                       lambda_pos: float = 1.0) -> torch.Tensor:
+    """
+    Squared pose distance per time:
+    d^2 = lambda_rot * ||log(R1^T R2)||_F^2 + lambda_pos * ||p1 - p2||^2
+
+    T1, T2: (B, T, 4, 4)
+    returns: (B, T)
+    """
+    R1, p1 = T1[..., :3, :3], T1[..., :3, 3]
+    R2, p2 = T2[..., :3, :3], T2[..., :3, 3]
+
+    R_rel = torch.matmul(R1.transpose(-1, -2), R2)  # (B,T,3,3)
+    so3   = logSO3(R_rel.reshape(-1,3,3)).reshape(*R_rel.shape)  # use provided logSO3
+    dR2   = torch.linalg.matrix_norm(so3, dim=(-2, -1))**2       # ||log||_F^2
+    dp2   = torch.sum((p1 - p2)**2, dim=-1)
+    return lambda_rot * dR2 + lambda_pos * dp2
+
+
+# ---------- main metric with PT ----------
+def riemann_anisotropic_distance_SE3_PT(
+    Tseq1: torch.Tensor, Tseq2: torch.Tensor,
+    *,
+    # You can pass either Vb (body twist) directly, or Tdot; if Tdot is given we convert to Vb.
+    Vb1: torch.Tensor | None = None,
+    Vb2: torch.Tensor | None = None,
+    Tdot1: torch.Tensor | None = None,
+    Tdot2: torch.Tensor | None = None,
+    lambda_rot: float = 1.0,
+    lambda_pos: float = 10.0,
+    lambda_vel: float = 1e-1,
+    alpha_dir: float = 10.0,
+    beta_mag: float = 1.0,
+    sigma: float = 0.5,
+    eps: float = 1e-12,
+    tau: float = 1e-6,
+    v_ref_mode: str = "mean"  # {"mean","seq1","seq2"}
+):
+    """
+    Direction-sensitive Riemannian distance on SE(3) with proper parallel transport.
+
+    Inputs
+    ------
+    Tseq1, Tseq2 : (B, T, 4, 4) poses
+    Vb1, Vb2     : (B, T, 6) body twists at Tseq1 / Tseq2
+    Tdot1, Tdot2 : (B, T, 4, 4) pose time-derivatives (if Vb* not provided)
+
+    Returns
+    -------
+    distances : (B, T)
+    pose_part : (B, T)  = lambda_rot*||log(R1^T R2)||^2 + lambda_pos*||p1-p2||^2
+    vel_part  : (B, T)  = <Δξ, A(ξ_ref) Δξ>  with ξ in T_{Tseq1}SE(3)
+    """
+    B, T, _, _ = Tseq1.shape
+
+    # 1) pose part
+    pose_part = _pose_distance_SE3(Tseq1, Tseq2, lambda_rot=lambda_rot, lambda_pos=lambda_pos)
+
+    # 2) get body twists
+    if Vb1 is None or Vb2 is None:
+        assert (Tdot1 is not None) and (Tdot2 is not None), "Provide Vb* or Tdot*."
+    if Vb1 is None:
+        Vb1 = Tdot_to_Vb(Tdot1.reshape(-1,4,4), Tseq1.reshape(-1,4,4)).reshape(B,T,4,4)
+        Vb1 = screw_bracket(Vb1).reshape(B,T,6)  # [w,v]
+    if Vb2 is None:
+        Vb2 = Tdot_to_Vb(Tdot2.reshape(-1,4,4), Tseq2.reshape(-1,4,4)).reshape(B,T,4,4)
+        Vb2 = screw_bracket(Vb2).reshape(B,T,6)
+
+    # 3) parallel transport xi2 to T1
+    
+    xi2_at_T1 = parallel_transport_twist_SE3(Vb2, Tseq1, Tseq2)  # (B,T,6)
+
+    # 4) reference twist for anisotropy
+    if v_ref_mode == "mean":
+        
+        xi_ref = 0.5 * (Vb1 + xi2_at_T1)
+    elif v_ref_mode == "seq1":
+        xi_ref = Vb1
+    elif v_ref_mode == "seq2":
+        xi_ref = xi2_at_T1
+    else:
+        raise ValueError("v_ref_mode must be one of {'mean','seq1','seq2'}")
+
+    # 5) anisotropic SPD A(ξ_ref)
+
+    A = _build_A_se3(
+    xi_ref,
+    beta_rot=1.0, alpha_rot=10.0, sigma_rot=0.3, enable_rot_aniso=True,
+    beta_trans=1.0, alpha_trans=10.0, sigma_trans=0.5, enable_trans_aniso=True
+)
+    
+
+    # 6) velocity difference in same tangent space T_{T1}SE(3)
+    dxi = (Vb1 - xi2_at_T1).unsqueeze(-1)           # (B,T,6,1)
+    tmp = torch.matmul(A, dxi)                      # (B,T,6,1)
+    vel_part = torch.matmul(dxi.transpose(-2, -1), tmp)[..., 0, 0]  # (B,T)
+    if torch.isnan(vel_part).any():
+        print("vel_part is NaN")
+    distances = pose_part + lambda_vel * vel_part
+    return distances, pose_part, vel_part
